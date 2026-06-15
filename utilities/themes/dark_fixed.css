@@ -1,0 +1,116 @@
+/* --- PyQt6 Compatible Dark Theme --- */
+
+/* --- Allgemein --- */
+QWidget {
+    font-family: "Segoe UI", "Roboto", Arial;
+    color: #e6eef8;
+    background-color: #0b0f16;
+    font-size: 13pt;
+}
+
+/* --- Buttons --- */
+QPushButton {
+    padding: 9px 16px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background-color: #0f1522;
+    color: #ffffff;
+    font-weight: 600;
+    min-height: 36px;
+}
+
+    QPushButton:hover {
+        background-color: #121a2b;
+        border: 1px solid #2a78ff;
+    }
+
+    QPushButton:pressed {
+        background-color: #0b1220;
+        border: 1px solid #1f5ed6;
+    }
+
+    QPushButton:disabled {
+        background-color: #0b0f16;
+        color: #3a4152;
+        border: 1px solid #1a1f2a;
+    }
+
+/* --- Inputs --- */
+QLineEdit, QComboBox, QListWidget, QTextEdit {
+    background-color: #111827;
+    border-radius: 10px;
+    padding: 9px 12px;
+    border: 1px solid rgba(255,255,255,0.06);
+    color: #e6eef8;
+}
+
+    QLineEdit:focus, QComboBox:focus, QTextEdit:focus {
+        border: 1px solid #2a78ff;
+        background-color: #13203a;
+    }
+
+/* --- Labels --- */
+QLabel {
+    color: #cfd8ea;
+}
+
+    QLabel#status {
+        color: #9fb0d8;
+        padding: 6px 0;
+        font-size: 10pt;
+    }
+
+/* --- List Widgets --- */
+QListWidget {
+    background-color: transparent;
+}
+
+    QListWidget::item {
+        padding: 10px 14px;
+        margin: 4px 0;
+        border-radius: 10px;
+        background-color: transparent;
+    }
+
+        QListWidget::item:hover {
+            background-color: rgba(255,255,255,0.04);
+        }
+
+        QListWidget::item:selected {
+            background-color: #163a73;
+            color: white;
+        }
+
+/* --- Dialogs --- */
+QDialog, QProgressDialog {
+    background-color: rgba(15,18,25,0.96);
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.07);
+    padding: 14px;
+}
+
+/* --- Menus --- */
+QMenu {
+    background-color: rgba(11,15,22,0.98);
+    color: #dcdcdc;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 6px;
+    font-size: 13px;
+}
+
+    QMenu::item {
+        padding: 8px 16px;
+        border-radius: 6px;
+    }
+
+        QMenu::item:selected {
+            background-color: #1f4fa3;
+            color: white;
+        }
+
+    QMenu::separator {
+        height: 1px;
+        background: rgba(255,255,255,0.08);
+        margin: 6px 8px;
+    }
