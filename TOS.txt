@@ -1,0 +1,170 @@
+ANCORATE – Nutzungsbedingungen (Terms of Service)
+Letzte Aktualisierung: Mai 2026
+
+1. Einleitung
+
+Willkommen bei ANCORATE software („wir“, „uns“ oder „unser“).
+
+Durch den Zugriff auf, das Herunterladen, Installieren oder die Nutzung jeglicher Teile unserer Software, Website, Dokumentation oder sonstiger digitaler Dienste (zusammenfassend der „Service“) erklären Sie sich damit einverstanden, diese Nutzungsbedingungen („Bedingungen“) einzuhalten und rechtlich an sie gebunden zu sein.
+
+Wenn Sie diese Bedingungen nicht vollständig akzeptieren, müssen Sie die Nutzung des Services unverzüglich einstellen.
+Bitte lesen Sie diese Bedingungen sorgfältig durch, da sie Ihre Rechte, Pflichten und Einschränkungen bei der Nutzung von ANCORATE festlegen.
+
+2. Zweck von ANCORATE-Software
+
+ANCORATE-Software stellt Verschlüsselungs- und Sicherheitstechnologien bereit, die konzipiert sind für:
+
+	Ende-zu-Ende-Verschlüsselung von Daten und Dateien
+
+	Lokale Schlüsselgenerierung und -verwaltung
+
+	Sicheren Dateiaustausch und Verifikation
+
+	Kryptografische Operationen wie Hashing, Signieren und Schlüsselableitung
+
+ANCORATE-Software ist für eine rechtmäßige, ethische und datenschutzorientierte Nutzung entwickelt.
+
+Sie als Nutzer sind allein dafür verantwortlich, dass Ihre Nutzung des Services allen anwendbaren Gesetzen entspricht, einschließlich, aber nicht beschränkt auf:
+
+	Datenschutz- und Privatsphäre-Gesetze (z. B. DSGVO)
+
+	Cybersicherheits- und Exportkontrollvorschriften
+
+	Vorschriften zum Schutz geistigen Eigentums und handelsrechtliche Bestimmungen
+
+ANCORATE-Software darf nicht in Rechtsordnungen oder Szenarien verwendet werden, in denen Verschlüsselungssoftware eingeschränkt oder verboten ist.
+
+3. Lizenz und zulässige Nutzung
+
+Wir gewähren Ihnen eine beschränkte, nicht-exklusive, nicht übertragbare und widerrufliche Lizenz zur Installation und Nutzung des Services für persönliche, akademische oder organisatorische Zwecke.
+
+Sofern nicht ausdrücklich schriftlich gestattet, ist es Ihnen untersagt:
+
+	Die Software zurückzuentwickeln (Reverse Engineering), zu dekompilieren oder zu disassemblieren
+
+	Die Software zu verändern, zu übersetzen oder abgeleitete Werke zu erstellen
+
+	Teile von ANCORATE-Software zu verkaufen, zu vermieten, zu unterlizenzieren oder zu verbreiten
+
+	Urheberrechts-, Marken- oder sonstige Schutzvermerke zu entfernen oder zu verändern
+
+Jede unbefugte oder rechtswidrige Nutzung des Services führt automatisch und ohne vorherige Ankündigung zur Beendigung dieser Lizenz.
+
+4. Sicherheit, Datenverantwortung und Schlüsselverwaltung
+
+ANCORATE-Software ist als Zero-Knowledge-Verschlüsselungsplattform konzipiert. Das bedeutet:
+
+Wir speichern, loggen und übertragen keine Ihrer verschlüsselten Daten oder Schlüssel.
+
+Sämtliche Ver- und Entschlüsselungsvorgänge erfolgen ausschließlich lokal auf Ihrem Gerät.
+
+Sie sind vollständig verantwortlich für:
+
+	Den Schutz und die Sicherung Ihrer Verschlüsselungsschlüssel, Passwörter und Wiederherstellungsphrasen
+
+	Die Verwaltung und Integrität Ihrer verschlüsselten Dateien
+
+Der Verlust von Schlüsseln oder Zugangsdaten führt zum dauerhaften Verlust Ihrer Daten.
+ANCORATE-Software, seine Entwickler und verbundenen Parteien können verlorene Daten unter keinen Umständen wiederherstellen oder Dateien entschlüsseln.
+
+5. Datenschutz und Datenerhebung
+
+ANCORATE-Software basiert auf dem Prinzip „Privacy by Design“.
+
+Wir erheben, speichern oder teilen keine personenbezogenen Daten, Nutzungsprotokolle oder Telemetriedaten.
+
+Wenn Sie uns freiwillig kontaktieren (z. B. per E-Mail oder Supportformular), kann Ihre Korrespondenz ausschließlich zum Zweck der Bearbeitung Ihrer Anfrage gespeichert werden.
+Wir verkaufen oder übermitteln keine Nutzerdaten an Dritte.
+
+Weitere Informationen finden Sie in unserer Datenschutzerklärung (verfügbar unter: https://www.ancorate.com/privacy
+).
+
+6. Unzulässige Nutzung
+
+Sie verpflichten sich, ANCORATE nicht für rechtswidrige, unethische oder unbefugte Aktivitäten zu verwenden, einschließlich, aber nicht beschränkt auf:
+
+	Durchführung oder Verschleierung illegaler Aktivitäten
+
+	Verbreitung oder Verschlüsselung von Schadsoftware
+
+	Verletzung geistiger Eigentumsrechte oder Persönlichkeitsrechte Dritter
+
+	Nutzung der Software zur Entwicklung oder zum Einsatz von Waffen-, Überwachungs- oder Spionagesystemen
+
+	Umgehung oder Verletzung von Exportkontroll- oder Cybersicherheitsvorschriften
+
+Verstöße gegen diese Bestimmungen können zur sofortigen Beendigung des Zugangs sowie zu rechtlichen Schritten führen.
+
+7. Updates, Änderungen und Anpassungen
+
+ANCORATE-Software kann regelmäßig Updates, Sicherheitspatches oder Verbesserungen veröffentlichen.
+
+Wir behalten uns das Recht vor:
+
+	Den Service vorübergehend oder dauerhaft zu ändern oder einzustellen
+
+	Diese Bedingungen anzupassen, um technischen, rechtlichen oder geschäftlichen Änderungen Rechnung zu tragen
+
+Ihre fortgesetzte Nutzung des Services nach einer Aktualisierung gilt als Zustimmung zu den überarbeiteten Bedingungen.
+Sie sind selbst dafür verantwortlich, die Bedingungen regelmäßig zu überprüfen.
+
+8. Haftungsausschluss (Gewährleistung)
+
+Der Service wird „wie besehen“ und „wie verfügbar“ bereitgestellt, ohne ausdrückliche oder stillschweigende Gewährleistung irgendeiner Art.
+
+Wir übernehmen keine Gewähr dafür, dass:
+
+	Der Service unterbrechungsfrei oder fehlerfrei funktioniert
+
+	Er mit sämtlicher Hardware, Systemen oder Konfigurationen kompatibel ist
+
+	Er Ihren individuellen Anforderungen oder Erwartungen entspricht
+
+Soweit gesetzlich zulässig, schließt ANCORATE sämtliche stillschweigenden Gewährleistungen aus, einschließlich der Marktgängigkeit, Eignung für einen bestimmten Zweck und Nichtverletzung von Rechten Dritter.
+
+9. Haftungsbeschränkung
+
+Soweit gesetzlich zulässig, haften ANCORATE, seine Gründer, Entwickler, Mitwirkenden und verbundenen Parteien nicht für direkte, indirekte, zufällige, besondere, Folge- oder Strafschäden, die entstehen aus oder im Zusammenhang mit:
+
+	Der Nutzung oder Nichtnutzbarkeit des Services
+
+	Datenverlust, Datenbeschädigung oder unbefugtem Zugriff
+
+	Fehlern, Bugs oder Sicherheitslücken in der Software
+
+Selbst wenn wir auf die Möglichkeit solcher Schäden hingewiesen wurden, ist unsere Gesamthaftung im Rahmen eines Anspruchs auf den Betrag beschränkt, der (falls zutreffend) für die Softwarelizenz gezahlt wurde.
+
+10. Kündigung und Durchsetzung
+
+Wir können Ihren Zugang zum Service jederzeit und ohne vorherige Ankündigung aussetzen oder beenden, wenn:
+
+	Sie gegen diese Bedingungen verstoßen
+
+	Sie rechtswidrige oder schädliche Aktivitäten ausüben
+
+	Dies gesetzlich oder durch behördliche Anordnung erforderlich ist
+
+Im Falle einer Kündigung müssen Sie die Nutzung des Services unverzüglich einstellen und sämtliche in Ihrem Besitz befindlichen Kopien vernichten.
+
+Andernfalls behalten wir uns vor, die Software dauerhaft über einen nicht entfernbaren, tief im Code integrierten Selbstzerstörungsmechanismus zu deaktivieren.
+
+11. Anwendbares Recht und Gerichtsstand
+
+Diese Bedingungen unterliegen dem Recht der Europäischen Union sowie – soweit anwendbar – dem Recht der Bundesrepublik Deutschland unter Ausschluss kollisionsrechtlicher Bestimmungen.
+
+Alle Streitigkeiten im Zusammenhang mit diesen Bedingungen unterliegen der ausschließlichen Zuständigkeit der Gerichte in Mainz, Deutschland.
+
+12. Kontaktinformationen
+
+Für Fragen, Feedback oder rechtliche Korrespondenz kontaktieren Sie bitte:
+
+ANCORATE software
+
+© 2025–2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
+📧 E-Mail: ancorate@web.de
+
+Versionshinweis
+
+Dieses Dokument ersetzt alle vorherigen Versionen der ANCORATE-Nutzungsbedingungen.
+Gegebenenfalls müssen Sie den überarbeiteten Nutzungsbedingungen erneut zustimmen.

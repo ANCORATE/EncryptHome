@@ -1,0 +1,159 @@
+﻿class UpgradeDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.setWindowTitle("Upgrade auf EncryptPro")
+        self.setFixedSize(960, 520)
+        self.setModal(True)
+
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #0b0f14;
+                color: #e6e9ef;
+            }
+            QLabel {
+                color: #e6e9ef;
+            }
+        """)
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(32, 32, 32, 32)
+        root.setSpacing(32)
+
+        # ---------------- LEFT / HERO ----------------
+        hero = QVBoxLayout()
+        hero.setSpacing(18)
+
+        badge = QLabel("GET ENCRYPT PRO INDIVIDUAL")
+        badge.setStyleSheet("""
+            QLabel {
+                background: rgba(79,140,255,0.15);
+                color: #4f8cff;
+                padding: 6px 14px;
+                border-radius: 999px;
+                font-size: 13px;
+            }
+        """)
+        badge.setFixedWidth(240)
+
+        title = QLabel("EncryptPro")
+        title.setFont(QFont("Inter", 42, QFont.Weight.Bold))
+
+        subtitle = QLabel(
+            "Maximale Sicherheit. Volle Kontrolle.\n"
+            "Schalte die professionellen Funktionen von EncryptHome frei "
+            "und werde Herr deiner Daten."
+        )
+        subtitle.setStyleSheet("color: #9aa4b2; font-size: 18px;")
+        subtitle.setWordWrap(True)
+
+        hero.addWidget(badge)
+        hero.addWidget(title)
+        hero.addWidget(subtitle)
+        hero.addSpacing(16)
+
+        for text in [
+            "Erweiterte Verschlüsselungsmodi & Key‑Management",
+            "ANCORATE Discovery zum Teilen des Tresors",
+            "Automatische Updates & Sicherheits‑Patches",
+            "Priorisierter Support",
+        ]:
+            row = QHBoxLayout()
+            icon = QLabel("✔")
+            icon.setStyleSheet("color: #36d399; font-weight: bold;")
+            label = QLabel(text)
+            row.addWidget(icon)
+            row.addWidget(label)
+            row.addStretch()
+            hero.addLayout(row)
+
+        hero.addStretch()
+
+        # ---------------- RIGHT / CARD ----------------
+        card = QFrame()
+        card.setStyleSheet("""
+            QFrame {
+                background: #121821;
+                border: 1px solid #1f2937;
+                border-radius: 18px;
+            }
+        """)
+
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(60)
+        shadow.setOffset(0, 20)
+        shadow.setColor(QColor(0, 0, 0, 180))
+        card.setGraphicsEffect(shadow)
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(32, 32, 32, 32)
+        card_layout.setSpacing(18)
+
+        plan = QLabel("EncryptPro Individual")
+        plan.setFont(QFont("Inter", 22, QFont.Weight.Bold))
+
+        price = QLabel("9 €  <span style='font-size:16px;color:#9aa4b2;'>/ Jahr</span>")
+        price.setTextFormat(Qt.TextFormat.RichText)
+        price.setFont(QFont("Inter", 44, QFont.Weight.Bold))
+
+        card_layout.addWidget(plan)
+        card_layout.addWidget(price)
+
+        for f in [
+            "Unbegrenzte Nutzung der Offline‑Tools",
+            "Eingeschränkte Nutzung der Online‑Tools",
+            "Mindestens 3 Jahre Updates (26.x)",
+            "Höhere Performance & Hardening",
+            "Kompatibel mit allen ANCORATE‑Modulen",
+        ]:
+            lbl = QLabel(f"✔ {f}")
+            lbl.setStyleSheet("color: #d1d5db;")
+            card_layout.addWidget(lbl)
+
+        card_layout.addSpacing(12)
+
+        upgrade = QPushButton("Upgrade anfragen")
+        upgrade.setCursor(Qt.CursorShape.PointingHandCursor)
+        upgrade.setStyleSheet("""
+            QPushButton {
+                background: #4f8cff;
+                color: white;
+                padding: 16px;
+                border-radius: 14px;
+                font-size: 18px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #3b7cff;
+            }
+        """)
+        upgrade.clicked.connect(self.open_mail)
+
+        note = QLabel("Freischaltung nach Rückmeldung · Verfügbar ab April")
+        note.setStyleSheet("color: #9aa4b2; font-size: 13px;")
+        note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        card_layout.addWidget(upgrade)
+        card_layout.addWidget(note)
+
+        root.addLayout(hero, 3)
+        root.addWidget(card, 2)
+
+    def open_mail(self):
+        QDesktopServices.openUrl(QUrl(
+            "mailto:ancorate@web.de?"
+            "subject=EncryptPro%20Upgrade%20Anfrage"
+            "&body=---%20EncryptPro%20Upgrade-Anfrage%20---%0D%0A%0D%0A"
+            "Name:%20%0D%0A"
+            "Firma:%20(optional)%0D%0A"
+            "E-Mail:%20%0D%0A"
+            "Produkt:%20EncryptPro%20Individual%0D%0A"
+            "Betriebssystem:%20Windows%20/%20macOS%20/%20Linux%0D%0A"
+            "Anzahl%20Lizenzen:%20%0D%0A%0D%0A"
+            "Nachricht:%0D%0A%0D%0A"
+            "--------------------------------"
+        ))
+
+    def open_upgrade_page(self):
+        dlg = UpgradeDialog(self)
+        dlg.exec()
