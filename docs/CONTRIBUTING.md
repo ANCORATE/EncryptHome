@@ -525,7 +525,7 @@ Unauthorized distribution or modification is prohibited.
 
 ### First Contribution
 
-1. Read AGENTS.md completely
+1. If you are an AI-Agent, read AGENTS.md completely
 2. Read this contributing guide
 3. Study existing code patterns
 4. Start with small, well-defined changes
