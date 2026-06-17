@@ -61,7 +61,7 @@ def get_app_icon():
     
     # Fallback: Leeres Icon
     return QIcon()
-UPDATE_URL = "https://magicblueentity.github.io/latest/EncryptHome/latest.json"
+UPDATE_URL = "https://ancorate.github.io/latest/EncryptHome/latest.json"
 
 DEFAULT_SETTINGS = {
     # --- Hotkeys (alt Defaults) ---
@@ -468,6 +468,10 @@ class SettingsDialog(QDialog):
         self.changelog_group.setLayout(group_layout)
         layout.addWidget(self.changelog_group, 1)  # Expandiert
 
+        self.update_status_label = QLabel("Update-Status: noch nicht geprüft")
+        self.update_status_label.setStyleSheet("color: #c0c0c0; font-size: 13px;")
+        layout.addWidget(self.update_status_label)
+
         # Update Buttons
         btn_row = QHBoxLayout()
 
@@ -475,8 +479,13 @@ class SettingsDialog(QDialog):
         self.check_update_btn.clicked.connect(self.check_updates_manual)
         btn_row.addWidget(self.check_update_btn)
 
-        upgrade_btn = QPushButton("Upgrade auf EncryptPro (coming soon)")
+        self.install_update_btn = QPushButton("Update installieren")
+        self.install_update_btn.setObjectName("primary")
+        self.install_update_btn.setEnabled(False)
+        self.install_update_btn.clicked.connect(self.install_update)
+        btn_row.addWidget(self.install_update_btn)
 
+        upgrade_btn = QPushButton("Upgrade auf EncryptPro (coming soon)")
         btn_row.addWidget(upgrade_btn)
 
         layout.addLayout(btn_row)
@@ -605,9 +614,6 @@ class SettingsDialog(QDialog):
             return False
 
     def check_updates_manual(self):
-        if not self.ensure_admin():
-            return
-
         if EncryptHomeUpdater is None:
             QMessageBox.critical(
                 self, "Fehler", "Das Modul 'updater.py' wurde nicht gefunden."
@@ -634,8 +640,12 @@ class SettingsDialog(QDialog):
             data = result.get("data", {})
 
             if status == "NO_UPDATE":
+                self.update_status_label.setText("Update-Status: Keine neue Version verfügbar.")
+                self.install_update_btn.setEnabled(False)
                 QMessageBox.information(
-                    self, "Keine Updates verfügbar", "EncryptHome ist auf dem neuesten Stand."
+                    self,
+                    "Keine Updates verfügbar",
+                    "EncryptHome ist auf dem neuesten Stand.",
                 )
                 return
 
@@ -678,17 +688,14 @@ class SettingsDialog(QDialog):
             if "size_mb" in data:
                 info_text += f"Downloadgröße: {data['size_mb']} MB\n"
 
-            info_text += "\nMöchten Sie das Update jetzt installieren?"
+            info_text += "\nKlicken Sie auf 'Update installieren', um den Installer zu starten."
 
-            reply = QMessageBox.question(
-                self,
-                title,
-                info_text,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            self.update_status_label.setText(
+                f"Update verfügbar: v{data.get('version')} ({update_type})"
             )
+            self.install_update_btn.setEnabled(True)
 
-            if reply == QMessageBox.StandardButton.Yes:
-                updater.start_update()
+            QMessageBox.information(self, title, info_text)
 
         except Exception as e:
             error_msg = str(e)
@@ -701,6 +708,40 @@ class SettingsDialog(QDialog):
                     self, "Update-Fehler", f"Update konnte nicht durchgeführt werden:\n{e}"
                 )
 
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def install_update(self):
+        if EncryptHomeUpdater is None:
+            QMessageBox.critical(
+                self, "Fehler", "Das Modul 'updater.py' wurde nicht gefunden."
+            )
+            return
+
+        updater = EncryptHomeUpdater(
+            current_version=VERSION_FULL,
+            update_json_url=self.data.get("update_url", UPDATE_URL),
+        )
+
+        reply = QMessageBox.question(
+            self,
+            "Update installieren",
+            "Das Update wird nun heruntergeladen und der Installer gestartet.\n"
+            "Die Anwendung wird danach geschlossen.\n\n"
+            "Möchten Sie fortfahren?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            updater.start_update()
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Update-Fehler", f"Update konnte nicht gestartet werden:\n{e}"
+            )
         finally:
             QApplication.restoreOverrideCursor()
 

@@ -53,7 +53,19 @@ class EncryptHomeUpdater:
                 raise RuntimeError("SHA256-Prüfung fehlgeschlagen")
 
         if platform.system() == "Windows":
-            subprocess.Popen([setup_path], shell=True)
+            try:
+                import ctypes
+
+                ctypes.windll.shell32.ShellExecuteW(
+                    None,
+                    "runas",
+                    setup_path,
+                    None,
+                    None,
+                    1,
+                )
+            except Exception:
+                subprocess.Popen([setup_path], shell=True)
         else:
             subprocess.Popen([setup_path])
         sys.exit(0)

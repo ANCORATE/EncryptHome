@@ -568,7 +568,7 @@ CONFIG_DIR = "~/.ancorate" (or platform-specific)
 SETTINGS_FILE = "settings.json"
 VERSION_YEAR = "26"
 VERSION_FULL = "26.2"
-UPDATE_URL = "https://magicblueentity.github.io/latest/EncryptHome/latest.json"
+UPDATE_URL = "https://ancorate.github.io/latest/EncryptHome/latest.json"
 ```
 
 ### Default Settings

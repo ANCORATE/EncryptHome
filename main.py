@@ -15,6 +15,7 @@ import hashlib
 import json
 import struct
 import platform
+import requests
 
 # Network / Discovery
 # from discovery.request_client import *
@@ -1724,6 +1725,95 @@ class FileDropList(QListWidget):
         return paths
 
 
+class StartupUpdateWorker(QThread):
+    """Prüft im Hintergrund, ob ein Update verfügbar ist."""
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def run(self):
+        try:
+            settings = load_settings()
+            update_url = settings.get("update_url", UPDATE_URL)
+            response = requests.get(update_url, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            data["update_url"] = update_url
+            self.finished.emit(data)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class UpdateNewsDialog(QDialog):
+    def __init__(self, parent: QWidget | None, update_data: dict):
+        super().__init__(parent)
+        self.setWindowTitle("EncryptHome News")
+        self.setWindowIcon(get_app_icon())
+        self.resize(640, 420)
+        self.setModal(True)
+
+        version = update_data.get("version", "unbekannt")
+        release_date = (
+            update_data.get("release_date")
+            or update_data.get("date")
+            or "Unbekannt"
+        )
+
+        headline = QLabel(f"Update verfügbar: Version {version}")
+        headline.setStyleSheet("font-weight: bold; font-size: 18px;")
+        headline.setWordWrap(True)
+
+        details = QTextBrowser()
+        details.setOpenExternalLinks(True)
+        details.setStyleSheet(
+            "background-color: #1b1e24; color: #e7e7e7; border: 1px solid #444;"
+        )
+
+        notes = (
+            update_data.get("changelog")
+            or update_data.get("release_notes")
+            or update_data.get("notes")
+            or update_data.get("description")
+            or update_data.get("news")
+            or "Keine weiteren Informationen verfügbar."
+        )
+
+        if isinstance(notes, list):
+            notes = "\n".join(f"- {item}" for item in notes)
+        elif not isinstance(notes, str):
+            notes = str(notes)
+
+        description = (
+            f"<h3>Version {version}</h3>"
+            f"<p><b>Veröffentlicht:</b> {release_date}</p>"
+            "<hr>"
+            f"<pre style=\"font-size:12px; white-space:pre-wrap; word-wrap:break-word;\">{notes}</pre>"
+        )
+        details.setHtml(description)
+
+        actions = QHBoxLayout()
+        actions.addStretch()
+        close_btn = QPushButton("Später")
+        close_btn.setObjectName("secondary")
+        open_updates_btn = QPushButton("Zu Updates")
+        open_updates_btn.setObjectName("primary")
+        actions.addWidget(close_btn)
+        actions.addWidget(open_updates_btn)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(headline)
+        layout.addWidget(details, 1)
+        layout.addLayout(actions)
+
+        close_btn.clicked.connect(self.reject)
+        open_updates_btn.clicked.connect(self.open_updates)
+
+    def open_updates(self):
+        self.accept()
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "show_settings_dialog"):
+            parent.show_settings_dialog()
+
+
 class App(QWidget):
     LAN_DISC_PORT = 48291  # UDP-Port für LAN-Discovery
     LAN_TCP_PORT = 48292  # TCP-Port für LAN-Verbindungen
@@ -1754,6 +1844,7 @@ class App(QWidget):
         self._lan_tcp_sock = None
         self.settings_dialog = SettingsDialog
         self._settings_dialog = None
+        self.update_worker = None
         self.data = load_settings()
         # Vorschau-Cache (RAM): LRU-Cache für bereits entschlüsselte Bytes
         self._preview_cache: OrderedDict[str, tuple[bytes, object]] = OrderedDict()
@@ -1851,6 +1942,60 @@ class App(QWidget):
         dialog = SettingsDialog()
         dialog.exec()  # Modal Popup
 
+    def check_updates_quick(self):
+        if not hasattr(self, "_settings_dialog") or self._settings_dialog is None:
+            self._settings_dialog = SettingsDialog(self)
+        self._settings_dialog.display_category(3)
+        self._settings_dialog.show()
+        self._settings_dialog.raise_()
+        self._settings_dialog.activateWindow()
+        self._settings_dialog.check_updates_manual()
+
+    def start_update_check(self):
+        if self.update_worker is not None and self.update_worker.isRunning():
+            return
+
+        self.update_worker = StartupUpdateWorker()
+        self.update_worker.finished.connect(self.on_update_check_finished)
+        self.update_worker.error.connect(self.on_update_check_error)
+        self.update_worker.start()
+
+    def is_update_available(self, data: dict) -> bool:
+        try:
+            def parse_version(v: str):
+                parts = str(v).split(".")
+                while len(parts) < 3:
+                    parts.append("0")
+                return tuple(int(p) for p in parts[:3])
+
+            current = parse_version(version)
+            latest = parse_version(data.get("version", version))
+            return latest > current
+        except Exception:
+            return False
+
+    def on_update_check_finished(self, data: dict):
+        self.update_data = data
+        if not self.is_update_available(data):
+            return
+
+        self.status.setText(
+            f"Update verfügbar: v{data.get('version')} – Öffnen Sie Einstellungen > Updates"
+        )
+
+        self.show_update_news(data)
+
+    def on_update_check_error(self, error_msg: str):
+        print(f"[UPDATE] Updatecheck fehlgeschlagen: {error_msg}")
+
+    def show_update_news(self, data: dict):
+        if self.update_news_shown:
+            return
+        self.update_news_shown = True
+
+        dlg = UpdateNewsDialog(self, data)
+        dlg.exec()
+
     # ------------------ Menüleiste ------------------
     def add_menubar(self):
         menubar = QMenuBar()
@@ -1878,7 +2023,9 @@ class App(QWidget):
             QAction("Datei exportieren", self),
             QAction("Alles exportieren", self),
         ]
-        help = [QAction(f"Über {edition} {version_year}", self)]
+        help_menu = QMenu("Hilfe", self)
+        update_check_action = QAction("Auf Updates prüfen", self)
+        about_action = QAction(f"Über {edition} {version_year}", self)
 
         # Verbindungen
         actions_file[1].triggered.connect(lambda: self.choose_container(1))
@@ -1888,6 +2035,8 @@ class App(QWidget):
         actions_file[4].triggered.connect(self.close_container)
         actions_file[5].triggered.connect(self.delete_container)
         actions_file[7].triggered.connect(lambda: self.show_settings_dialog())
+        update_check_action.triggered.connect(self.check_updates_quick)
+        about_action.triggered.connect(self.show_about_dialog)
 
         actions_edit[0].triggered.connect(self.add_file_dialog)
         actions_edit[1].triggered.connect(self.preview_selected)
@@ -1897,7 +2046,7 @@ class App(QWidget):
 
         # discovery[1].triggered.connect(self.open_discovery_gui)
 
-        help[0].triggered.connect(self.show_about_dialog)
+        help_actions = [update_check_action, about_action]
 
         # for file menu
         for a in actions_file:
@@ -1912,8 +2061,9 @@ class App(QWidget):
         # for a in discovery:
         #   menus[2].addAction(a)
         # for help menu
-        for a in help:
-            menus[2].addAction(a)
+        for a in help_actions:
+            help_menu.addAction(a)
+        menus[2] = help_menu
 
         for m in menus:
             menubar.addMenu(m)
@@ -4004,6 +4154,9 @@ def main():
         window = App()
         window.show()
         print("MAIN WINDOW SHOWN", flush=True)
+
+        # Background update check at startup
+        QTimer.singleShot(1000, window.start_update_check)
 
         # Delayed start of keep_search thread to ensure GUI is fully initialized
         QTimer.singleShot(2000, lambda: threading.Thread(target=window.keep_search, daemon=True).start())
