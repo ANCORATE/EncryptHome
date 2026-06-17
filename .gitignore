@@ -80,3 +80,4 @@ credentials/
 # Linux: ~/.config/ANCORATE/
 # Windows: %APPDATA%\ANCORATE\
 # macOS: ~/Library/Application Support/ANCORATE/
+EncryptHome.code-workspace
