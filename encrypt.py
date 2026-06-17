@@ -19,12 +19,13 @@ def encrypt_meta(meta: dict, master_key: bytes) -> bytes:
 
 
 # AES-GCM file encryption to blob
-def encrypt_file_to_blob(src_path: str, out_fh, master_key: bytes, progress_cb=None, stop_event: threading.Event | None=None):
+def encrypt_file_to_blob(src_path: str, out_fh, master_key: bytes, filename: str | None = None, progress_cb=None, stop_event: threading.Event | None=None):
     total = os.path.getsize(src_path)
     read_bytes = 0
     file_nonce = secrets.token_bytes(16)
     out_fh.write(file_nonce)
-    subkey = derive_subkey(master_key, file_nonce, os.path.basename(src_path))
+    file_name = filename if filename is not None else os.path.basename(src_path)
+    subkey = derive_subkey(master_key, file_nonce, file_name)
     nonce = secrets.token_bytes(12)
     out_fh.write(nonce)
     encryptor = Cipher(algorithms.AES(subkey), modes.GCM(nonce), backend=default_backend()).encryptor()

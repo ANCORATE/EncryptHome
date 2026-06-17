@@ -197,10 +197,12 @@ class SettingsDialog(QDialog):
         btn_layout.addStretch()  # Schiebt Buttons nach rechts
 
         save_btn = QPushButton("Speichern")
+        save_btn.setObjectName("primary")
         save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         save_btn.clicked.connect(self.save)
 
         cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.setObjectName("secondary")
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel_btn.clicked.connect(self.reject)
 
@@ -295,14 +297,17 @@ class SettingsDialog(QDialog):
         maint_layout.setSpacing(12)  # optischer Abstand
 
         clear_cache_btn = QPushButton("Temporären Cache leeren")
+        clear_cache_btn.setObjectName("secondary")
         clear_cache_btn.setIcon(QIcon.fromTheme("edit-clear"))
         clear_cache_btn.clicked.connect(self.clear_temp_cache)
 
         kill_btn = QPushButton("Anwendung sofort beenden")
+        kill_btn.setObjectName("danger")
         kill_btn.setIcon(QIcon.fromTheme("system-restart"))
         kill_btn.clicked.connect(self.kill_app)
 
         delete_vaults_btn = QPushButton("Alle Tresore löschen")
+        delete_vaults_btn.setObjectName("danger")
         delete_vaults_btn.setIcon(QIcon.fromTheme("edit-delete"))
         delete_vaults_btn.clicked.connect(self.open_salt_scanner)
 
@@ -542,7 +547,7 @@ class SettingsDialog(QDialog):
 
     def on_changelog_error(self, error_msg):
         """Wird aufgerufen, wenn der Worker fehlschlägt."""
-        if "errno 11001" in error_msg.lower:
+        if "errno 11001" in error_msg.lower():
             self.changelog_text.setText(
                 f"Fehler bei der Verbindung zum Update-Server (DNS-Resolve fehlgeschlagen).\nBitte prüfen Sie Ihre Internetverbindung."
             )

@@ -403,7 +403,12 @@ def rekey_container_password(
                 tmp_encrypt_path = tmp_encrypt.name
             
             with open(tmp_encrypt_path, "wb") as tmp_encrypt_file:
-                encrypt_file_to_blob(tmp_decrypt_path, tmp_encrypt_file, new_master)
+                encrypt_file_to_blob(
+                    tmp_decrypt_path,
+                    tmp_encrypt_file,
+                    new_master,
+                    filename=file_name,
+                )
             
             # Read re-encrypted blob
             with open(tmp_encrypt_path, "rb") as enc_file:
@@ -653,15 +658,17 @@ def change_container_password(container_path: str, current_master_key: bytes, cu
 
     change_btn = QPushButton("Passwort ändern")
     cancel_btn = QPushButton("Abbrechen")
+    cancel_btn.setObjectName("secondary")
     change_btn.setDefault(True)
     change_btn.setMinimumWidth(150)
     cancel_btn.setMinimumWidth(120)
-    change_btn.setStyleSheet(
-        "QPushButton { background: #2f7cf6; color: white; border: none; "
-        "border-radius: 6px; padding: 9px 18px; font-weight: 600; }"
-        "QPushButton:hover { background: #3f8cff; }"
-        "QPushButton:pressed { background: #2265d1; }"
-    )
+    change_btn.setObjectName("primary")
+    # change_btn.setStyleSheet(
+        #     "QPushButton { background: #2f7cf6; color: white; border: none; "
+        #     "border-radius: 6px; padding: 9px 18px; font-weight: 600; }"
+        #     "QPushButton:hover { background: #3f8cff; }"
+        #     "QPushButton:pressed { background: #2265d1; }"
+    # )
 
     btn_layout.addWidget(change_btn)
     btn_layout.addWidget(cancel_btn)
@@ -917,7 +924,8 @@ def get_password_with_requirements(parent, title="Passwort eingeben") -> tuple[s
     
     ok_btn = QPushButton("OK")
     cancel_btn = QPushButton("Abbrechen")
-    
+    cancel_btn.setObjectName("secondary")
+
     btn_layout.addWidget(ok_btn)
     btn_layout.addWidget(cancel_btn)
     layout.addLayout(btn_layout)
@@ -1532,6 +1540,7 @@ und dauerhaft an dieses Gerät gebunden."""
         layout.addWidget(self.key_box)
 
         self.btn_done = QPushButton("Fertig")
+        self.btn_done.setObjectName("primary")
         self.btn_done.clicked.connect(self.finish)
         layout.addWidget(self.btn_done)
 
@@ -1572,6 +1581,7 @@ class LoginDialog(QDialog):
         btn_row = QHBoxLayout()
 
         self.btn_try = QPushButton(f"Bei {edition} anmelden")
+        self.btn_try.setObjectName("primary")
         self.btn_try.clicked.connect(self.do_check)
         btn_row.addWidget(self.btn_try)
 
@@ -1733,6 +1743,10 @@ class App(QWidget):
         self.master_key = None
         self.flags = 0
         self.meta = {"files": []}
+        # Passwort-Änderungs-Zustandsvariablen
+        self.changing_password = False
+        self.password_change_in_progress = False
+        self.rekey_temp_backup = None
         self.stop_event = None
         self.progress = None
         self._lan_sharing = False
@@ -1943,8 +1957,11 @@ class App(QWidget):
         btn_layout.addStretch()
         
         open_btn = QPushButton("Öffnen")
+        open_btn.setObjectName("primary")
         clear_btn = QPushButton("Liste löschen")
+        clear_btn.setObjectName("danger")
         cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.setObjectName("secondary")
         
         btn_layout.addWidget(open_btn)
         btn_layout.addWidget(clear_btn)
@@ -2005,13 +2022,14 @@ class App(QWidget):
             if success and new_pwd:
                 self.append_log("Passwort wurde erfolgreich geändert.")
                 
-                # Close current container before re-opening
+                # Preserve current container path before closing
+                container_path = self.container_path
                 self.close_container()
                 
                 # Re-open the container with new password
                 try:
                     # Re-open container with new password
-                    self.open_container_with_password(self.container_path, new_pwd)
+                    self.open_container_with_password(container_path, new_pwd)
                     self.append_log("Container mit neuem Passwort erneut geöffnet.")
                     
                 except Exception as e:
@@ -2557,6 +2575,10 @@ Mögliche Ursache
             self.update_container_path()
 
             self.meta = {"files": []}
+            # Passwort-Änderungs-Zustandsvariablen
+            self.changing_password = False
+            self.password_change_in_progress = False
+            self.rekey_temp_backup = None
 
             self.refresh_list()
             self.append_log(f"Tresor mit {method} erfolgreich vernichtet.")
@@ -2621,6 +2643,10 @@ Mögliche Ursache
         self.pwd = ""
         self.master_key = None
         self.meta = {"files": []}
+        # Passwort-Änderungs-Zustandsvariablen
+        self.changing_password = False
+        self.password_change_in_progress = False
+        self.rekey_temp_backup = None
         self.flags = 0
         self.keyfile_bytes = None
         self.stop_event = None
@@ -2643,6 +2669,13 @@ Mögliche Ursache
         Datei(en) zum Tresor hinzufügen.
         :param filepaths: Liste von Pfaden oder None → Dialog öffnen
         """
+        if self.changing_password or self.password_change_in_progress:
+            QMessageBox.information(
+                self, 
+                "Info", 
+                "Ein Passwortwechsel wird durchgeführt. Bitte warten Sie, bis dieser abgeschlossen ist."
+            )
+            return
         if filepaths is None:
             files, _ = QFileDialog.getOpenFileNames(
                 self, "Dateien zum Tresor hinzufügen", "", "Alle Dateien (*.*)"
@@ -2732,6 +2765,13 @@ Mögliche Ursache
         return sorted(unique_indexes)
 
     def export_selected(self, idx: int = 0, mode: int = 0, target_dir: str = ""):
+        if self.changing_password or self.password_change_in_progress:
+            QMessageBox.information(
+                self, 
+                "Info", 
+                "Ein Passwortwechsel wird durchgeführt. Bitte warten Sie, bis dieser abgeschlossen ist, bevor Sie Dateien exportieren."
+            )
+            return
         if self.exporting:
             QMessageBox.information(self, "Info", "Ein Export läuft bereits. Bitte kurz warten.")
             return
@@ -2876,6 +2916,13 @@ Mögliche Ursache
         thread.start()
 
     def export_all(self):
+        if self.changing_password or self.password_change_in_progress:
+            QMessageBox.information(
+                self, 
+                "Info", 
+                "Ein Passwortwechsel wird durchgeführt. Bitte warten Sie, bis dieser abgeschlossen ist, bevor Sie Dateien exportieren."
+            )
+            return
         if not self.meta.get("files"):
             QMessageBox.information(
                 self, "Info", "Keine Dateien zum Exportieren vorhanden."
@@ -3120,8 +3167,11 @@ Mögliche Ursache
         thread.deleteLater()
 
         # Fehler anzeigen und loggen
-        QMessageBox.critical(self, "Fehler", repr(error))
-        self.append_log(f"Fehler: {repr(error)}")
+        error_msg = error if isinstance(error, str) else str(error)
+        if not error_msg:
+            error_msg = repr(error)
+        QMessageBox.critical(self, "Fehler", error_msg)
+        self.append_log(f"Fehler: {error_msg}")
 
     def _export_finished(self, path, thread, worker):
         thread.quit()

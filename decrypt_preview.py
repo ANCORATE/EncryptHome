@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from cryptography.exceptions import InvalidTag, InvalidSignature
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -91,7 +92,8 @@ class PreviewDecryptWorker(QObject):
             )
             self.finished.emit(data, info)
         except Exception as e:
-            self.error.emit(str(e))
+            error_msg = str(e) or repr(e)
+            self.error.emit(error_msg)
 
     def _progress(self, v: int):
         try:
@@ -203,7 +205,13 @@ def decrypt_entry_to_bytes(
                 progress_cb(int(read_total / ciphertext_len * 100))
 
         # finalize prüft implizit das GCM-Tag
-        last = decryptor.finalize()
+        try:
+            last = decryptor.finalize()
+        except InvalidTag as e:
+            raise ValueError(
+                "Ungültiges Passwort oder beschädigter Tresor. Bitte Passwort prüfen."
+            ) from e
+
         if last:
             if max_bytes == 0:
                 out.extend(last)
@@ -216,8 +224,12 @@ def decrypt_entry_to_bytes(
                 else:
                     truncated = True
 
-        # HMAC verifizieren
-        hm.verify(hval)
+        try:
+            hm.verify(hval)
+        except InvalidSignature as e:
+            raise ValueError(
+                "Ungültiges Passwort oder beschädigter Tresor. Bitte Passwort prüfen."
+            ) from e
 
     data = bytes(out)
     info = PreviewInfo(

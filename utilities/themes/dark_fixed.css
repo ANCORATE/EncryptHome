@@ -35,6 +35,53 @@ QPushButton {
         border: 1px solid #1a1f2a;
     }
 
+    /* Semantic Button Classes */
+    QPushButton#primary {
+        background-color: #2f7cf6;
+        border: none;
+        color: white;
+        font-weight: 700;
+    }
+
+        QPushButton#primary:hover {
+            background-color: #3f8cff;
+        }
+
+        QPushButton#primary:pressed {
+            background-color: #2265d1;
+        }
+
+    QPushButton#secondary {
+        background-color: #1a1f2e;
+        border: 1px solid rgba(255,255,255,0.1);
+        color: #cfd8ea;
+        font-weight: 500;
+    }
+
+        QPushButton#secondary:hover {
+            background-color: #252b3d;
+            border-color: rgba(255,255,255,0.2);
+        }
+
+        QPushButton#secondary:pressed {
+            background-color: #121622;
+        }
+
+    QPushButton#danger {
+        background-color: #dc2626;
+        border: none;
+        color: white;
+        font-weight: 700;
+    }
+
+        QPushButton#danger:hover {
+            background-color: #ef4444;
+        }
+
+        QPushButton#danger:pressed {
+            background-color: #b91c1c;
+        }
+
 /* --- Inputs --- */
 QLineEdit, QComboBox, QListWidget, QTextEdit {
     background-color: #111827;
@@ -54,8 +101,30 @@ QLabel {
     color: #cfd8ea;
 }
 
-    QLabel#status {
-        color: #9fb0d8;
+QLabel#status {
+    color: #9fb0d8;
+    padding: 6px 0;
+    font-size: 10pt;
+}
+
+    /* Status Indicator Classes */
+    QLabel#status-secure {
+        color: #10b981;
+        font-weight: 600;
+        padding: 6px 0;
+        font-size: 10pt;
+    }
+
+    QLabel#status-warning {
+        color: #f59e0b;
+        font-weight: 600;
+        padding: 6px 0;
+        font-size: 10pt;
+    }
+
+    QLabel#status-error {
+        color: #ef4444;
+        font-weight: 600;
         padding: 6px 0;
         font-size: 10pt;
     }

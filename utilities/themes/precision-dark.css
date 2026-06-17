@@ -39,6 +39,21 @@ QLabel {
         color: #94a3b8;
     }
 
+    QLabel#status-secure {
+        color: #10b981;
+        font-weight: 600;
+    }
+
+    QLabel#status-warning {
+        color: #f59e0b;
+        font-weight: 600;
+    }
+
+    QLabel#status-error {
+        color: #ef4444;
+        font-weight: 600;
+    }
+
 /* ---------- Buttons ---------- */
 QPushButton {
     background-color: #020617;
@@ -78,6 +93,22 @@ QPushButton {
             background-color: #1e40af;
         }
 
+    /* Secondary */
+    QPushButton#secondary {
+        background-color: #1e293b;
+        border: 1px solid rgba(148,163,184,0.2);
+        color: #e5e7eb;
+    }
+
+        QPushButton#secondary:hover {
+            background-color: #334155;
+            border-color: rgba(148,163,184,0.3);
+        }
+
+        QPushButton#secondary:pressed {
+            background-color: #0f172a;
+        }
+
     /* Danger */
     QPushButton#danger {
         background-color: #dc2626;
@@ -87,6 +118,10 @@ QPushButton {
 
         QPushButton#danger:hover {
             background-color: #b91c1c;
+        }
+
+        QPushButton#danger:pressed {
+            background-color: #991b1b;
         }
 
 /* ---------- Inputs ---------- */

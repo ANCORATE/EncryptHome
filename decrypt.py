@@ -3,6 +3,7 @@ import os
 import json
 import tempfile
 import threading
+from cryptography.exceptions import InvalidTag, InvalidSignature
 from cryptography.hazmat.primitives import hmac, hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
@@ -80,7 +81,12 @@ def decrypt_blob_range(fh, out_path: str, blob_len: int, master_key: bytes, file
             if not c:
                 break
             hm.update(c)
-    hm.verify(hval)
+    try:
+        hm.verify(hval)
+    except InvalidSignature as e:
+        raise ValueError(
+            "Ungültiges Passwort oder beschädigter Tresor. Bitte Passwort prüfen."
+        ) from e
     subkey = derive_subkey(master_key, file_nonce, filename)
     decryptor = Cipher(algorithms.AES(subkey), modes.GCM(nonce, tag), backend=default_backend()).decryptor()
     out_dir = os.path.dirname(out_path) or os.curdir
@@ -102,7 +108,12 @@ def decrypt_blob_range(fh, out_path: str, blob_len: int, master_key: bytes, file
                     done += len(c)
                     if progress_cb and ciphertext_len:
                         progress_cb(60 + int(done / ciphertext_len * 39))
-                last = decryptor.finalize()
+                try:
+                    last = decryptor.finalize()
+                except InvalidTag as e:
+                    raise ValueError(
+                        "Ungültiges Passwort oder beschädigter Tresor. Bitte Passwort prüfen."
+                    ) from e
                 if last:
                     out_tmp.write(last)
         os.replace(tmp_out_path, out_path)
@@ -134,10 +145,20 @@ def decrypt_meta(blob: bytes, master_key: bytes) -> dict:
 
     hm = hmac.HMAC(master_key, hashes.SHA256())
     hm.update(ct_tag)
-    hm.verify(hval)  # raist InvalidSignature, falls falsch
+    try:
+        hm.verify(hval)
+    except InvalidSignature as e:
+        raise ValueError(
+            "Ungültiges Passwort oder beschädigter Tresor. Bitte Passwort prüfen."
+        ) from e
 
     aesg = AESGCM(master_key)
-    pt = aesg.decrypt(nonce, ct_tag, None)
+    try:
+        pt = aesg.decrypt(nonce, ct_tag, None)
+    except InvalidTag as e:
+        raise ValueError(
+            "Ungültiges Passwort oder beschädigter Tresor. Bitte Passwort prüfen."
+        ) from e
 
     return json.loads(pt.decode("utf-8"))
 

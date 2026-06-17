@@ -85,9 +85,11 @@ class SaltScannerUI(QWidget):
         layout = QVBoxLayout(self)
 
         self.scan_button = QPushButton("Scan nach Tresoren auf allen Laufwerken (das kann eine Weile dauern)")
+        self.scan_button.setObjectName("secondary")
         self.scan_button.clicked.connect(self.run_scan)
 
         self.emergency_button = QPushButton("EMERGENCY VAULT DATA WIPE")
+        self.emergency_button.setObjectName("danger")
         self.emergency_button.clicked.connect(self.emergency_delete)
 
         self.list_widget = QListWidget()

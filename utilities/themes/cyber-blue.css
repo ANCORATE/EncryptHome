@@ -42,6 +42,57 @@ QPushButton {
         box-shadow: none;
     }
 
+    /* Semantic Button Classes */
+    QPushButton#primary {
+        background-color: #2a78ff;
+        border: none;
+        color: white;
+        font-weight: 700;
+    }
+
+        QPushButton#primary:hover {
+            background-color: #3a8cff;
+            box-shadow: 0 4px 12px rgba(42,120,255,0.6);
+        }
+
+        QPushButton#primary:pressed {
+            background-color: #1f5ed6;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+    QPushButton#secondary {
+        background-color: #1a1f2e;
+        border: 1px solid rgba(42,120,255,0.2);
+        color: #cfd8ea;
+        font-weight: 500;
+    }
+
+        QPushButton#secondary:hover {
+            background-color: #252b3d;
+            border-color: rgba(42,120,255,0.4);
+        }
+
+        QPushButton#secondary:pressed {
+            background-color: #121622;
+        }
+
+    QPushButton#danger {
+        background-color: #ff3366;
+        border: none;
+        color: white;
+        font-weight: 700;
+    }
+
+        QPushButton#danger:hover {
+            background-color: #ff4d85;
+            box-shadow: 0 4px 12px rgba(255,51,102,0.5);
+        }
+
+        QPushButton#danger:pressed {
+            background-color: #cc2952;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+        }
+
 /* --- Inputs --- */
 QLineEdit, QComboBox, QListWidget, QTextEdit {
     background-color: #111827;
@@ -64,6 +115,28 @@ QLabel {
 
     QLabel#status {
         color: #9fb0d8;
+        padding: 6px 0;
+        font-size: 10pt;
+    }
+
+    /* Status Indicator Classes */
+    QLabel#status-secure {
+        color: #00d4aa;
+        font-weight: 600;
+        padding: 6px 0;
+        font-size: 10pt;
+    }
+
+    QLabel#status-warning {
+        color: #ffb347;
+        font-weight: 600;
+        padding: 6px 0;
+        font-size: 10pt;
+    }
+
+    QLabel#status-error {
+        color: #ff6b6b;
+        font-weight: 600;
         padding: 6px 0;
         font-size: 10pt;
     }

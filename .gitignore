@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# PyInstaller
+*.spec
+build/
+dist/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# IDE/Editor (generic)
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# OS-specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Logs/Temp
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+
+# Security - Never commit sensitive data
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
+.env
+.env.local
+
+# Application-specific (user data)
+# Settings are stored in platform-specific locations outside repo
+# Linux: ~/.config/ANCORATE/
+# Windows: %APPDATA%\ANCORATE\
+# macOS: ~/Library/Application Support/ANCORATE/
