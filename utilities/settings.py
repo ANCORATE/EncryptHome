@@ -67,12 +67,12 @@ DEFAULT_SETTINGS = {
     # --- Hotkeys (alt Defaults) ---
     "o_seq": "Ctrl+E",
     "del_seq": "Del",
-    "add_seq": "Ctrl++",  # TODO implementieren in die main
+    "add_seq": "Ctrl++",
     "vault_o_seq": "Ctrl+O",
     "o_all_seq": "Alt+E",
     "search_seq": "Return",
     "crea_vault_seq": "Ctrl+N",
-    "del_vault_seq": "Alt+Del",  # TODO implementieren in die main
+    "del_vault_seq": "Alt+Del",
     # --- Design ---
     "theme": "Standard-dark",
     # --- Updater (alte Defaults) ---
@@ -80,6 +80,8 @@ DEFAULT_SETTINGS = {
     # --- NEU: System & Verhalten ---
     "confirm_exit": True,
     "del_source_added": False,
+    "encrypt_intelligence_enabled": False,
+    "encrypt_intelligence_search_integration": False,
     # --- NEU: Sicherheit & Pfade ---
     "deletion_method": "Standard",  # Standard, DoD, Gutmann
 }
@@ -158,7 +160,13 @@ class SettingsDialog(QDialog):
         # --- Linke Sidebar (Navigation) ---
         self.category_list = QListWidget()
         # Icons könnten hier optional hinzugefügt werden
-        self.category_list.addItems(["Allgemein", "Kurzbefehle", "Design", "Updates"])
+        self.category_list.addItems([
+            "Allgemein",
+            "Kurzbefehle",
+            "Design",
+            "EncryptIntelligence",
+            "Updates",
+        ])
         self.category_list.setFixedWidth(180)
         self.category_list.currentRowChanged.connect(self.display_category)
 
@@ -182,6 +190,7 @@ class SettingsDialog(QDialog):
         self.create_general_tab()
         self.create_shortcuts_tab()
         self.create_design_tab()
+        self.create_intelligence_tab()
         self.create_updates_tab()  # Neuer separater Tab
 
         right_layout.addWidget(self.stack, 1)  # 1 = Stretch factor
@@ -439,6 +448,56 @@ class SettingsDialog(QDialog):
         self.theme_combo.setCurrentText(self.data.get("theme", "Standard-dark"))
         self.theme_combo.currentTextChanged.connect(self._save_theme)
         layout.addWidget(self.theme_combo)
+
+        layout.addStretch()
+        widget.setLayout(layout)
+        self.stack.addWidget(widget)
+
+    def create_intelligence_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        title = QLabel("EncryptIntelligence")
+        title.setStyleSheet("font-weight: bold; font-size: 18px; color: #ffffff;")
+        layout.addWidget(title)
+
+        description = QLabel(
+            "Lokale KI-Unterstützung für verschlüsselte Dokumente."
+            " Die Dokumentenindizierung erfolgt lokal und verschlüsselt."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        self.cb_intelligence_enabled = QCheckBox("EncryptIntelligence aktivieren")
+        self.cb_intelligence_enabled.setChecked(
+            self.data.get("encrypt_intelligence_enabled", False)
+        )
+        self.cb_intelligence_enabled.stateChanged.connect(
+            self._save_intelligence_settings
+        )
+        layout.addWidget(self.cb_intelligence_enabled)
+
+        self.cb_search_integration = QCheckBox(
+            "Normale Suche um lokale Dokumenteninhalte erweitern"
+        )
+        self.cb_search_integration.setChecked(
+            self.data.get("encrypt_intelligence_search_integration", False)
+        )
+        self.cb_search_integration.stateChanged.connect(
+            self._save_intelligence_settings
+        )
+        self.cb_search_integration.setToolTip(
+            "Wenn aktiviert, werden Suchanfragen auch gegen den lokalen EncryptIntelligence-Index ausgeführt."
+        )
+        layout.addWidget(self.cb_search_integration)
+
+        hint = QLabel(
+            "Hinweis: Die Suche verwendet nur bereits indizierte Dokumente aus lokalen Tresoren."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #c0c0c0; font-size: 12px;")
+        layout.addWidget(hint)
 
         layout.addStretch()
         widget.setLayout(layout)
@@ -779,7 +838,15 @@ class SettingsDialog(QDialog):
         """Speichert Theme sofort"""
         self.data["theme"] = theme
         save_settings(self.data)
-    
+
+    def _save_intelligence_settings(self):
+        """Speichert EncryptIntelligence-Einstellungen sofort"""
+        self.data["encrypt_intelligence_enabled"] = self.cb_intelligence_enabled.isChecked()
+        self.data["encrypt_intelligence_search_integration"] = (
+            self.cb_search_integration.isChecked()
+        )
+        save_settings(self.data)
+
     def _save_shortcuts(self):
         """Speichert alle Shortcuts sofort"""
         self.data["o_seq"] = self.open_key_input.keySequence().toString()

@@ -41,6 +41,9 @@ from utilities.checksum_check import *
 from utilities.header_utils import *
 from utilities.settings import *
 
+# EncryptIntelligence
+from intelligence import EncryptIntelligenceDialog, EncryptIntelligenceManager
+
 # -------------------------------------------------------------------------------------------------------------------
 
 
@@ -1845,6 +1848,7 @@ class App(QWidget):
         self.settings_dialog = SettingsDialog
         self._settings_dialog = None
         self.update_worker = None
+        self.intelligence_manager = None
         self.data = load_settings()
         # Vorschau-Cache (RAM): LRU-Cache für bereits entschlüsselte Bytes
         self._preview_cache: OrderedDict[str, tuple[bytes, object]] = OrderedDict()
@@ -2002,7 +2006,7 @@ class App(QWidget):
         menus = [
             QMenu("Datei", self),
             QMenu("Bearbeiten", self),
-            # QMenu("Discovery", self),
+            QMenu("EncryptIntelligence", self),
             QMenu("Hilfe", self),
         ]
 
@@ -2023,6 +2027,8 @@ class App(QWidget):
             QAction("Datei exportieren", self),
             QAction("Alles exportieren", self),
         ]
+        intelligence_menu = QMenu("EncryptIntelligence", self)
+        open_intelligence_action = QAction("EncryptIntelligence öffnen", self)
         help_menu = QMenu("Hilfe", self)
         update_check_action = QAction("Auf Updates prüfen", self)
         about_action = QAction(f"Über {edition} {version_year}", self)
@@ -2035,6 +2041,7 @@ class App(QWidget):
         actions_file[4].triggered.connect(self.close_container)
         actions_file[5].triggered.connect(self.delete_container)
         actions_file[7].triggered.connect(lambda: self.show_settings_dialog())
+        open_intelligence_action.triggered.connect(self.show_intelligence_dialog)
         update_check_action.triggered.connect(self.check_updates_quick)
         about_action.triggered.connect(self.show_about_dialog)
 
@@ -2044,8 +2051,6 @@ class App(QWidget):
         actions_edit[3].triggered.connect(self.export_selected)
         actions_edit[4].triggered.connect(self.export_all)
 
-        # discovery[1].triggered.connect(self.open_discovery_gui)
-
         help_actions = [update_check_action, about_action]
 
         # for file menu
@@ -2053,17 +2058,17 @@ class App(QWidget):
             if a is None:
                 menus[0].addSeparator()
             else:
-                menus[0].addAction(a)  # menus[0].addiction(a) xD
+                menus[0].addAction(a)
         # for edit menu
         for a in actions_edit:
             menus[1].addAction(a)
-        # for discovery menu
-        # for a in discovery:
-        #   menus[2].addAction(a)
+        # for EncryptIntelligence menu
+        intelligence_menu.addAction(open_intelligence_action)
+        menus[2] = intelligence_menu
         # for help menu
         for a in help_actions:
             help_menu.addAction(a)
-        menus[2] = help_menu
+        menus[3] = help_menu
 
         for m in menus:
             menubar.addMenu(m)
@@ -2205,7 +2210,17 @@ class App(QWidget):
         self._settings_dialog.raise_()
         self._settings_dialog.activateWindow()
 
-    
+    def show_intelligence_dialog(self):
+        if not hasattr(self, "_intelligence_dialog") or self._intelligence_dialog is None:
+            self._intelligence_dialog = EncryptIntelligenceDialog(
+                self,
+                manager=self.intelligence_manager if self.intelligence_manager is not None else None,
+            )
+
+        self._intelligence_dialog.show()
+        self._intelligence_dialog.raise_()
+        self._intelligence_dialog.activateWindow()
+
     def get_pwd_dialog(self):
         print("Passwortabfrage")
         pwd, cancelled = get_password_with_requirements(self, "Passwort eingeben")
@@ -2296,12 +2311,12 @@ class App(QWidget):
     def apply_behavior_settings(self, settings):
         """Verhaltens-Einstellungen aktualisieren"""
         try:
-            # confirm_exit wird in closeEvent() geprüft - hier nur Daten aktualisieren
             self.data = settings
-            
-            # Deletion-Methode wird bei Verschlüsselung verwendet - hier nur speichern
-            # del_source_added wird bei Verschlüsselung verwendet - hier nur speichern
-            
+            if self.data.get("encrypt_intelligence_enabled", False):
+                if self.intelligence_manager is None:
+                    self.intelligence_manager = EncryptIntelligenceManager()
+            else:
+                self.intelligence_manager = None
             print("[SETTINGS] Verhaltens-Einstellungen aktualisiert")
         except Exception as e:
             print(f"[SETTINGS] Verhaltens-Fehler: {e}")
@@ -3371,7 +3386,7 @@ Mögliche Ursache
     def _on_progress(self, v):
         """Aktualisiert den Fortschrittsbalken."""
         try:
-            # Stelle sicher, dass 'self.progress' in deiner __init__ definiert wurde
+            # 'self.progress' in __init__ initialisieren, damit es immer existiert
             self.progress.setValue(v)
         except Exception as e:
             print(f"Fehler beim Update des Progressbars: {e}")
@@ -3384,10 +3399,27 @@ Mögliche Ursache
 
     # ------------------ Suchfunktion ------------------
     def start_search(self):
-        if self.search.text():
-            self.refresh_list(True)
-        else:
+        query = self.search.text().strip()
+        if not query:
             self.refresh_list()
+            return
+
+        if self.data.get("encrypt_intelligence_enabled", False) and self.data.get(
+            "encrypt_intelligence_search_integration", False
+        ) and self.intelligence_manager is not None:
+            try:
+                self.intelligence_manager.reload_storage()
+            except Exception:
+                pass
+            results = self.intelligence_manager.search_documents(query)
+            if results:
+                self.refresh_list(searching=True, intelligence_results=results)
+                self.status.setText(
+                    f"EncryptIntelligence: {len(results)} relevante Dokument(e) gefunden."
+                )
+                return
+
+        self.refresh_list(True)
     
     def keep_search(self):
         """Suchleiste am Leben erhalten"""
@@ -3426,10 +3458,17 @@ Mögliche Ursache
             print(f"[SEARCH] Thread-Fehler: {e}")
 
     # ------------------ Dateiliste aktualisieren ------------------
-    def refresh_list(self, searching: bool = False):
+    def refresh_list(self, searching: bool = False, intelligence_results=None):
         if getattr(self.file_list, "isEnabled", lambda: True)():
             self.file_list.clear()
             files = self.meta.get("files", [])
+            result_mapping = {}
+            if intelligence_results:
+                for result in intelligence_results:
+                    if result.get("filename"):
+                        result_mapping[result["filename"]] = result
+                    result_mapping[result["document_name"]] = result
+
             for idx, ent in enumerate(files):
                 name = ent.get("name", "<unnamed>")
                 size = ent.get("size", 0)
@@ -3447,11 +3486,24 @@ Mögliche Ursache
                 else:
                     size_text = f"{size / 1024**5:.2f} PB"
 
-                if self.search.text() in name or not searching:
+                if intelligence_results is not None:
+                    result = result_mapping.get(name)
+                    if not result:
+                        continue
+                    display_text = (
+                        f"{name} — {size_text} — KI {result['score']:.2f}\n"
+                        f"{result['snippet']}"
+                    )
+                elif self.search.text() and searching:
+                    if self.search.text().lower() not in name.lower():
+                        continue
                     display_text = f"{name} — {size_text}"
-                    item = QListWidgetItem(display_text)
-                    item.setData(Qt.ItemDataRole.UserRole, idx)
-                    self.file_list.addItem(item)
+                else:
+                    display_text = f"{name} — {size_text}"
+
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.ItemDataRole.UserRole, idx)
+                self.file_list.addItem(item)
 
 
 class DetailsDialog(QDialog):
