@@ -81,3 +81,4 @@ credentials/
 # Windows: %APPDATA%\ANCORATE\
 # macOS: ~/Library/Application Support/ANCORATE/
 *.code-workspace
+EncryptIntelligence-v1.gguf

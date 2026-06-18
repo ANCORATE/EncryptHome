@@ -111,11 +111,39 @@ class LocalLLMClient:
             self._load_error = f"Modell nicht gefunden: {self.model_path}"
             return
 
-        if self._try_load_gpt4all(context_length):
+        if self._try_load_llama_cpp(context_length):
             return
-        self._try_load_llama_cpp(context_length)
 
-    def _try_load_gpt4all(self, context_length: int) -> bool:
+        llama_cpp_missing = self._load_error == "llama-cpp-python nicht installiert"
+        if llama_cpp_missing:
+            return
+
+        self._try_load_gpt4all(context_length)
+
+    def _try_load_llama_cpp(self, context_length: int) -> bool:
+        try:
+            from llama_cpp import Llama
+        except ImportError:
+            self._load_error = "llama-cpp-python nicht installiert"
+            return False
+
+        try:
+            self.llm = Llama(
+                model_path=str(self.model_path),
+                n_ctx=context_length,
+                n_gpu_layers=0,
+                verbose=False,
+            )
+            self._available = True
+            self._backend = self._BACKEND_LLAMA_CPP
+            return True
+        except Exception as exc:
+            if not self._load_error:
+                self._load_error = str(exc)
+            self.llm = None
+            return False
+
+    def _try_load_gpt4all(self, context_length: int) -> None:
         try:
             from gpt4all import GPT4All
 
@@ -124,28 +152,11 @@ class LocalLLMClient:
                 model_path=str(self.model_path.parent),
                 model_type="gguf",
                 allow_download=False,
+                device="cpu",
                 n_ctx=context_length,
             )
             self._available = True
             self._backend = self._BACKEND_GPT4ALL
-            return True
-        except Exception as exc:
-            self._load_error = str(exc)
-            self.llm = None
-            return False
-
-    def _try_load_llama_cpp(self, context_length: int) -> None:
-        try:
-            from llama_cpp import Llama
-
-            self.llm = Llama(
-                model_path=str(self.model_path),
-                n_ctx=context_length,
-                n_gpu_layers=-1,
-                verbose=False,
-            )
-            self._available = True
-            self._backend = self._BACKEND_LLAMA_CPP
         except Exception as exc:
             if not self._load_error:
                 self._load_error = str(exc)
