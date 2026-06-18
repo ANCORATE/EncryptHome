@@ -1,17 +1,30 @@
-"""Kernfunktionalität für EncryptIntelligence.
+"""Kernfunktionalität für EncryptIntelligence mit Ollama LLM-Integration.
 
-Dieses Modul definiert die Konfiguration und die Managerklasse für lokale Dokumentenindexierung,
-RAG-basierte Antwortgenerierung und den Schutz sensibler Inhalte.
+Lokale Dokumentenindexierung, RAG mit LLM-Antwortgenerierung und intelligente
+Reminder-Extraktion – komplett offline.
 """
 
 import json
 import math
 import os
 import re
+import platform
+import shutil
+import socket
+import subprocess
+import tempfile
+import uuid
+import zipfile
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from xml.etree import ElementTree
+
+from llama_cpp import Llama
+from sentence_transformers import SentenceTransformer
+import numpy as np
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -19,73 +32,250 @@ from cryptography.hazmat.primitives.hmac import HMAC
 
 try:
     import fitz
-except ImportError:
+    if not hasattr(fitz, "open"):
+        raise ImportError("PyMuPDF-compatible fitz.open is missing")
+except Exception as exc:
     fitz = None
+    FITZ_IMPORT_ERROR = str(exc)
+else:
+    FITZ_IMPORT_ERROR = ""
 
 try:
     import docx
-except ImportError:
+    if not hasattr(docx, "Document"):
+        raise ImportError("python-docx Document is missing")
+except Exception as exc:
     docx = None
+    DOCX_IMPORT_ERROR = str(exc)
+else:
+    DOCX_IMPORT_ERROR = ""
 
 try:
     from PIL import Image
-except ImportError:
+except Exception as exc:
     Image = None
+    IMAGE_IMPORT_ERROR = str(exc)
+else:
+    IMAGE_IMPORT_ERROR = ""
 
 try:
     import pytesseract
-except ImportError:
+    configured_tesseract = shutil.which("tesseract")
+    if configured_tesseract:
+        pytesseract.pytesseract.tesseract_cmd = configured_tesseract
+except Exception as exc:
     pytesseract = None
+    TESSERACT_IMPORT_ERROR = str(exc)
+else:
+    TESSERACT_IMPORT_ERROR = ""
 
+class LocalLLMClient:
+    def __init__(
+        self,
+        model_path: str,
+        context_length: int = 8192
+    ):
+        self._available = False
+        self.llm = None
+
+        try:
+            self.llm = Llama(
+                model_path=model_path,
+                n_ctx=context_length,
+                n_gpu_layers=-1,
+                verbose=False,
+            )
+
+            self._available = True
+
+        except Exception:
+            self._available = False
+
+    def is_available(self) -> bool:
+        return self._available
+
+    def generate(
+        self,
+        prompt: str,
+        context: str = "",
+        temperature: float = 0.7,
+        max_tokens: int = 1024
+    ) -> str:
+
+        if not self._available:
+            return ""
+
+        full_prompt = f"{context}\n\n{prompt}"
+
+        try:
+            response = self.llm(
+                full_prompt,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+
+            return response["choices"][0]["text"].strip()
+
+        except Exception as exc:
+            return f"[LLM Fehler: {exc}]"
+
+# ============================================================================
+# Text Processing Utilities
+# ============================================================================
 
 def _normalize_text(text: str) -> str:
-    text = text.replace("\r", "\n")
-    text = re.sub(r"\s+", " ", text)
+    """Normalisiere Text: Zeilenumbrüche, Extra-Whitespace."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n\s*\n", "\n\n", text)  # Preserve paragraph breaks
+    text = re.sub(r"[ \t]+", " ", text)  # Collapse spaces/tabs on same line
     return text.strip()
 
 
 def _tokenize(text: str) -> List[str]:
+    """Tokenisiere für Embedding: Nur signifikante Worte."""
     tokens = re.findall(r"\b[\wäöüÄÖÜß'-]+\b", text.lower())
     return [t for t in tokens if len(t) > 1]
 
 
-def _cosine_similarity(a: Dict[str, float], b: Dict[str, float]) -> float:
-    if not a or not b:
-        return 0.0
-    dot = sum(a.get(k, 0.0) * b.get(k, 0.0) for k in a)
-    norm_a = math.sqrt(sum(v * v for v in a.values()))
-    norm_b = math.sqrt(sum(v * v for v in b.values()))
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return dot / (norm_a * norm_b)
+def _cosine_similarity(
+    a: np.ndarray,
+    b: np.ndarray
+) -> float:
+
+    return float(np.dot(a, b))
 
 
-def _make_snippet(text: str, query: str, max_length: int = 300) -> str:
+def _make_snippet(text: str, query: str, max_length: int = 250) -> str:
+    """Erstelle einen Snippet um relevante Query-Terme."""
     query_terms = _tokenize(query)
     lower_text = text.lower()
     best_pos = 0
     for term in query_terms:
         idx = lower_text.find(term)
         if idx != -1:
-            best_pos = idx
+            best_pos = max(0, idx - 50)
             break
-    start = max(0, best_pos - 80)
-    snippet = text[start : start + max_length]
-    if start > 0:
+    
+    snippet = text[best_pos : best_pos + max_length]
+    if best_pos > 0:
         snippet = "..." + snippet
-    if len(text) > start + max_length:
+    if len(text) > best_pos + max_length:
         snippet = snippet + "..."
-    return snippet
+    return snippet.strip()
 
+
+def _tesseract_available() -> bool:
+    """Prüfe ob Tesseract OCR verfügbar ist."""
+    if pytesseract is None:
+        return False
+    command = getattr(pytesseract.pytesseract, "tesseract_cmd", "")
+    return bool(command and shutil.which(command))
+
+
+# ============================================================================
+# Intelligente Reminder-Extraktion
+# ============================================================================
+
+class ReminderExtractor:
+    """Extrahiere Erinnerungen: Kündigungsfristen, Verträge, Garantien, Daten."""
+    
+    CANCELLATION_PATTERNS = [
+        r"\bkündig\w*\b",
+        r"\bkündigung\w*\b",
+        r"\bfrist\w*\b",
+        r"\bwechsel\w+\b",
+        r"\bauskünft\w*\b"
+    ]
+    
+    CONTRACT_PATTERNS = [
+        r"\bvertrag\w*\b",
+        r"\bversicher\w+\b",
+        r"\bpolice\b",
+        r"\bvertragslaufzeit\b",
+        r"\bvertragsbedingung\w*\b",
+        r"\btarif\w*\b"
+    ]
+    
+    WARRANTY_PATTERNS = [
+        r"\bgarant\w+\b",
+        r"\bgewährleist\w+\b",
+        r"\bgarantiez\w+\b"
+    ]
+    
+    DEADLINE_PATTERNS = [
+        r"\bfällig\b",
+        r"\btermin\w*\b",
+        r"\bstichtag\b",
+        r"\bdeadline\b",
+        r"\bfrist\w*\b"
+    ]
+    
+    DATE_PATTERN = r"(\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4})"
+    
+    @classmethod
+    def extract(cls, text: str, source_name: str) -> List[Dict[str, Any]]:
+        """Extrahiere alle relevanten Erinnerungen aus Text."""
+        reminders: List[Dict[str, Any]] = []
+        lowered = text.lower()
+        dates = re.findall(cls.DATE_PATTERN, text)
+        
+        if any(re.search(p, lowered) for p in cls.CANCELLATION_PATTERNS):
+            reminders.append({
+                "type": "cancellation",
+                "title": f"Kündigung erkannt: {source_name}",
+                "date": dates[0] if dates else None,
+                "source": source_name,
+                "created": datetime.now().isoformat()
+            })
+        
+        if any(re.search(p, lowered) for p in cls.CONTRACT_PATTERNS):
+            reminders.append({
+                "type": "contract",
+                "title": f"Vertrag/Versicherung: {source_name}",
+                "date": dates[0] if dates else None,
+                "source": source_name,
+                "created": datetime.now().isoformat()
+            })
+        
+        if any(re.search(p, lowered) for p in cls.WARRANTY_PATTERNS):
+            reminders.append({
+                "type": "warranty",
+                "title": f"Garantieablauf: {source_name}",
+                "date": dates[0] if dates else None,
+                "source": source_name,
+                "created": datetime.now().isoformat()
+            })
+        
+        if any(re.search(p, lowered) for p in cls.DEADLINE_PATTERNS):
+            if not any(r.get("type") in ("cancellation", "contract", "warranty") for r in reminders):
+                reminders.append({
+                    "type": "deadline",
+                    "title": f"Termin/Frist: {source_name}",
+                    "date": dates[0] if dates else None,
+                    "source": source_name,
+                    "created": datetime.now().isoformat()
+                })
+        
+        return reminders
+
+
+# ============================================================================
+# Configuration & Manager
+# ============================================================================
 
 @dataclass(frozen=True)
 class EncryptIntelligenceConfig:
-    """Konfiguration für das lokale EncryptIntelligence-Modul."""
-
+    """Konfiguration für EncryptIntelligence."""
+    
     storage_dir: Path = Path(os.path.expanduser("~")) / ".ancorate" / "encrypt_intelligence"
     index_name: str = "encrypt_intelligence_index"
-    model_name: str = "qwen3-8b"
-    embedding_model: str = "bge-m3"
+    llm_model_path: str = (
+        "models/qwen3-8b-q4_k_m.gguf"
+    )
+
+    embedding_model: str = (
+        "sentence-transformers/all-MiniLM-L6-v2"
+    )
     ocr_enabled: bool = True
     offline_only: bool = True
     max_chunk_size: int = 1200
@@ -93,36 +283,69 @@ class EncryptIntelligenceConfig:
     allowed_extensions: tuple = (".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg")
 
     def __post_init__(self):
+        object.__setattr__(self, 'storage_dir', Path(self.storage_dir))
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
 
 class EncryptIntelligenceManager:
-    """Manager für Dokumentenindexierung, RAG-Abfragen und Erinnerungsextraktion."""
+    """Manager für lokale Dokumentenindexierung und LLM-basierte Antworten."""
 
     def __init__(self, config: Optional[EncryptIntelligenceConfig] = None):
         self.config = config or EncryptIntelligenceConfig()
         self.index_path = self.config.storage_dir / f"{self.config.index_name}.enc"
         self.key_path = self.config.storage_dir / "storage_key.bin"
+        
         self._storage: Dict[str, Any] = {
             "documents": {},
             "reminders": [],
         }
-        self._storage_key = self._load_or_create_storage_key()
+        self.last_index_report: Dict[str, Any] = {"indexed": [], "skipped": []}
+        self._last_extraction_error = ""
+        
+        # LLM-Client initialisieren
+        self.llm = LocalLLMClient(
+            self.config.llm_model_path
+        )
+
+        self.embedding_model = SentenceTransformer(
+            self.config.embedding_model
+        )
+        
+        self._legacy_storage_key = self._load_legacy_storage_key()
+        self._storage_key = self._derive_storage_key()
         self._load_storage()
 
-    def _load_or_create_storage_key(self) -> bytes:
-        if self.key_path.exists():
-            key = self.key_path.read_bytes()
-            if len(key) == 32:
-                return key
+    def _derive_storage_key(self) -> bytes:
+        """Derive device-bound key für lokalen Index."""
+        mac = uuid.getnode().to_bytes(6, "big", signed=False)
+        raw = b"|".join([
+            b"EncryptIntelligence storage key v2",
+            socket.gethostname().encode("utf-8", errors="ignore"),
+            platform.system().encode("utf-8", errors="ignore"),
+            platform.machine().encode("utf-8", errors="ignore"),
+            platform.node().encode("utf-8", errors="ignore"),
+            mac,
+        ])
+        digest = hashes.Hash(hashes.SHA256())
+        digest.update(raw)
+        return digest.finalize()
 
-        key = os.urandom(32)
+    def _load_legacy_storage_key(self) -> Optional[bytes]:
+        """Lade alte Plaintext-Key nur zur Migration."""
+        if not self.key_path.exists():
+            return None
         try:
-            self.key_path.write_bytes(key)
-            os.chmod(self.key_path, 0o600)
+            key = self.key_path.read_bytes()
+            return key if len(key) == 32 else None
+        except Exception:
+            return None
+
+    def _remove_legacy_storage_key(self) -> None:
+        try:
+            if self.key_path.exists():
+                self.key_path.unlink()
         except Exception:
             pass
-        return key
 
     def _encrypt_blob(self, data: bytes) -> bytes:
         nonce = os.urandom(12)
@@ -130,26 +353,38 @@ class EncryptIntelligenceManager:
         encrypted = aesgcm.encrypt(nonce, data, None)
         return nonce + encrypted
 
-    def _decrypt_blob(self, blob: bytes) -> bytes:
+    def _decrypt_blob(self, blob: bytes, key: Optional[bytes] = None) -> bytes:
         if len(blob) < 12:
             raise ValueError("Ungültige verschlüsselte Daten")
         nonce = blob[:12]
-        aesgcm = AESGCM(self._storage_key)
+        aesgcm = AESGCM(key or self._storage_key)
         return aesgcm.decrypt(nonce, blob[12:], None)
 
     def _load_storage(self) -> None:
         if not self.index_path.exists():
             self._storage = {"documents": {}, "reminders": []}
+            self._remove_legacy_storage_key()
             return
+        
+        raw = self.index_path.read_bytes()
         try:
-            raw = self.index_path.read_bytes()
             payload = self._decrypt_blob(raw)
             self._storage = json.loads(payload.decode("utf-8"))
+            self._remove_legacy_storage_key()
         except Exception:
-            self._storage = {"documents": {}, "reminders": []}
+            if self._legacy_storage_key is None:
+                self._storage = {"documents": {}, "reminders": []}
+                return
+            try:
+                payload = self._decrypt_blob(raw, self._legacy_storage_key)
+                self._storage = json.loads(payload.decode("utf-8"))
+                self._save_storage()
+                self._remove_legacy_storage_key()
+            except Exception:
+                self._storage = {"documents": {}, "reminders": []}
 
     def reload_storage(self) -> None:
-        """Lädt den lokal gespeicherten Index erneut aus dem verschlüsselten Speicher."""
+        """Lade Index neu aus Speicher."""
         self._load_storage()
 
     def _save_storage(self) -> None:
@@ -160,63 +395,126 @@ class EncryptIntelligenceManager:
         except Exception:
             pass
 
-    def _embed(self, text: str) -> Dict[str, float]:
-        tokens = _tokenize(_normalize_text(text))
-        counter = Counter(tokens)
-        total = sum(counter.values())
-        if total == 0:
-            return {}
-        return {token: count / total for token, count in counter.items()}
+    def _embed(
+        self,
+        text: str
+    ) -> np.ndarray:
+
+        return self.embedding_model.encode(
+            text,
+            normalize_embeddings=True
+        )
 
     def _extract_text_from_pdf(self, raw_bytes: bytes) -> str:
+        """Extrahiere Text aus PDF mit fitz oder pdftotext."""
+        self._last_extraction_error = ""
+        
         if fitz is None:
-            return ""
+            pdftotext_path = shutil.which("pdftotext")
+            if not pdftotext_path:
+                self._last_extraction_error = "PDF-Parser fehlt"
+                return ""
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    tmp.write(raw_bytes)
+                    tmp_path = tmp.name
+                try:
+                    result = subprocess.run(
+                        [pdftotext_path, "-layout", tmp_path, "-"],
+                        capture_output=True,
+                        check=False,
+                        timeout=30
+                    )
+                finally:
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
+                
+                if result.returncode != 0:
+                    self._last_extraction_error = result.stderr.decode("utf-8", errors="ignore").strip()
+                    return ""
+                return result.stdout.decode("utf-8", errors="ignore")
+            except Exception as exc:
+                self._last_extraction_error = str(exc)
+                return ""
+
         text_parts: List[str] = []
         try:
             doc = fitz.open(stream=raw_bytes, filetype="pdf")
             for page in doc:
                 text = page.get_text() or ""
                 text_parts.append(text)
-                if not text and self.config.ocr_enabled and pytesseract is not None:
+                
+                if not text and self.config.ocr_enabled and _tesseract_available() and Image is not None:
                     for img in page.get_images(full=True):
-                        xref = img[0]
-                        pix = fitz.Pixmap(doc, xref)
-                        if pix.n < 5:
-                            mode = "RGB"
-                        else:
-                            mode = "RGBA"
-                        image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
-                        text_parts.append(pytesseract.image_to_string(image))
-        except Exception:
+                        try:
+                            xref = img[0]
+                            pix = fitz.Pixmap(doc, xref)
+                            mode = "RGB" if pix.n < 5 else "RGBA"
+                            image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
+                            text_parts.append(pytesseract.image_to_string(image))
+                        except Exception:
+                            pass
+        except Exception as exc:
+            self._last_extraction_error = str(exc)
             return ""
+        
         return "\n".join(text_parts)
 
     def _extract_text_from_docx(self, raw_bytes: bytes) -> str:
-        if docx is None:
-            return ""
+        """Extrahiere Text aus DOCX mit python-docx oder XML."""
+        self._last_extraction_error = ""
+        
+        if docx is not None:
+            try:
+                from io import BytesIO
+                document = docx.Document(BytesIO(raw_bytes))
+                text = "\n".join(p.text for p in document.paragraphs if p.text)
+                if text.strip():
+                    return text
+            except Exception as exc:
+                self._last_extraction_error = str(exc)
+
         try:
             from io import BytesIO
-
-            document = docx.Document(BytesIO(raw_bytes))
-            return "\n".join(p.text for p in document.paragraphs if p.text)
-        except Exception:
+            with zipfile.ZipFile(BytesIO(raw_bytes)) as archive:
+                xml_data = archive.read("word/document.xml")
+            root = ElementTree.fromstring(xml_data)
+            namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            paragraphs = []
+            for paragraph in root.findall(".//w:p", namespace):
+                parts = [node.text or "" for node in paragraph.findall(".//w:t", namespace)]
+                if parts:
+                    paragraphs.append("".join(parts))
+            text = "\n".join(paragraphs)
+            return text if text.strip() else ""
+        except Exception as exc:
+            self._last_extraction_error = str(exc)
             return ""
 
     def _extract_text_from_image(self, raw_bytes: bytes) -> str:
+        """Extrahiere Text aus Bild mit OCR."""
+        self._last_extraction_error = ""
         if Image is None:
+            self._last_extraction_error = "OCR nicht verfügbar"
             return ""
         try:
             from io import BytesIO
-
             image = Image.open(BytesIO(raw_bytes))
-            if pytesseract is None:
+            if not _tesseract_available():
+                self._last_extraction_error = "Tesseract nicht gefunden"
                 return ""
             return pytesseract.image_to_string(image)
-        except Exception:
+        except Exception as exc:
+            self._last_extraction_error = str(exc)
             return ""
 
     def _extract_text(self, document_name: str, raw_bytes: bytes) -> str:
+        """Extrahiere Text basierend auf Dateityp."""
+        self._last_extraction_error = ""
         ext = os.path.splitext(document_name)[1].lower()
+        
         if ext == ".txt":
             try:
                 return raw_bytes.decode("utf-8")
@@ -228,11 +526,14 @@ class EncryptIntelligenceManager:
             return self._extract_text_from_docx(raw_bytes)
         if ext in (".png", ".jpg", ".jpeg"):
             return self._extract_text_from_image(raw_bytes)
+        
         return ""
 
     def _decrypt_blob_in_memory(self, blob: bytes, master_key: bytes, filename: str) -> bytes:
+        """Entschlüssele Blob aus Container."""
         if len(blob) < 16 + 12 + 16 + 32:
             raise ValueError("Blob zu klein")
+        
         file_nonce = blob[:16]
         nonce = blob[16:28]
         ciphertext = blob[28:-48]
@@ -252,6 +553,7 @@ class EncryptIntelligenceManager:
         return aesgcm.decrypt(nonce, ciphertext + tag, None)
 
     def _update_reminders(self, new_reminders: List[Dict[str, Any]]) -> None:
+        """Aktualisiere Reminder ohne Duplikate."""
         existing = self._storage.get("reminders", [])
         for reminder in new_reminders:
             if not any(
@@ -266,6 +568,7 @@ class EncryptIntelligenceManager:
         return f"{source}::{document_name}"
 
     def index_text(self, document_name: str, text: str, metadata: Dict[str, Any]) -> None:
+        """Indexiere Text mit Embedding und Reminder-Extraktion."""
         normalized = _normalize_text(text)
         embedding = self._embed(normalized)
         source = metadata.get("source", "unbekannt")
@@ -278,127 +581,160 @@ class EncryptIntelligenceManager:
             "embedding": embedding,
             "document_name": document_name,
             "source": source,
-            "display_name": f"{document_name} ({source})",
+            "display_name": f"{document_name}",
         }
-        self._update_reminders(self.extract_reminders(normalized, document_id))
+        
+        new_reminders = ReminderExtractor.extract(normalized, document_id)
+        self._update_reminders(new_reminders)
         self._save_storage()
 
     def fetch_document(self, document_id: str) -> Optional[Dict[str, Any]]:
         return self._storage["documents"].get(document_id)
 
     def list_documents(self) -> List[str]:
-        return sorted(
-            [doc["display_name"] for doc in self._storage["documents"].values()]
-        )
+        """Liste alle indizierten Dokumente."""
+        return sorted([doc["display_name"] for doc in self._storage["documents"].values()])
 
-    def search_documents(self, query: str) -> List[Dict[str, Any]]:
+    def search_documents(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Suche Dokumente nach Query mit Ranking."""
         query_embedding = self._embed(query)
         results: List[Dict[str, Any]] = []
+        
         for doc in self._storage["documents"].values():
             score = _cosine_similarity(query_embedding, doc["embedding"])
             if score <= 0:
                 continue
 
-            snippet = _make_snippet(doc["text"], query)
-            results.append(
-                {
-                    "document_id": doc["id"],
-                    "filename": doc["document_name"],
-                    "document_name": doc["display_name"],
-                    "metadata": doc["metadata"],
-                    "snippet": snippet,
-                    "score": score,
-                    "source": doc["source"],
-                }
-            )
+            snippet = _make_snippet(doc["text"], query, max_length=400)
+            results.append({
+                "document_id": doc["id"],
+                "filename": doc["document_name"],
+                "document_name": doc["display_name"],
+                "metadata": doc["metadata"],
+                "snippet": snippet,
+                "text": doc["text"],  # Ganzer Text für LLM-Context
+                "score": score,
+                "source": doc["source"],
+            })
 
-        return sorted(results, key=lambda item: item["score"], reverse=True)
-
-    def extract_reminders(self, text: str, source_name: str) -> List[Dict[str, Any]]:
-        reminders: List[Dict[str, Any]] = []
-        lowered = text.lower()
-        dates = re.findall(r"\b(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})\b", text)
-        if "kündigung" in lowered or "kündigungsfrist" in lowered:
-            reminders.append({
-                "title": f"Kündigungsfrist erkennen: {source_name}",
-                "date": dates[0] if dates else None,
-                "source": source_name,
-            })
-        if "vertrag" in lowered or "versicher" in lowered:
-            reminders.append({
-                "title": f"Vertragsinformation: {source_name}",
-                "date": dates[0] if dates else None,
-                "source": source_name,
-            })
-        if "garantie" in lowered:
-            reminders.append({
-                "title": f"Garantiehinweis: {source_name}",
-                "date": dates[0] if dates else None,
-                "source": source_name,
-            })
-        if "ausweis" in lowered:
-            reminders.append({
-                "title": f"Ausweis geprüft: {source_name}",
-                "date": dates[0] if dates else None,
-                "source": source_name,
-            })
-        return reminders
+        return sorted(results, key=lambda item: item["score"], reverse=True)[:top_k]
 
     def get_reminders(self) -> List[Dict[str, Any]]:
+        """Hole alle extrahierten Erinnerungen."""
         return self._storage.get("reminders", [])
 
-    def _generate_answer(self, question: str, candidates: List[Dict[str, Any]]) -> str:
-        header = f"Antwort zu Ihrer Frage: '{question}'\n\n"
+    def capability_status(self) -> Dict[str, bool]:
+        """Gebe Parser-Status und LLM-Status zurück."""
+        pdftotext_available = shutil.which("pdftotext") is not None
+        return {
+            "pdf": fitz is not None or pdftotext_available,
+            "docx": True,
+            "ocr": Image is not None and _tesseract_available(),
+            "llm": self.llm.is_available(),
+            "fitz_error": FITZ_IMPORT_ERROR,
+            "docx_error": DOCX_IMPORT_ERROR,
+        }
+
+    def _generate_answer_with_llm(self, question: str, candidates: List[Dict[str, Any]]) -> str:
+        """Generiere natürliche Antwort mit Ollama LLM."""
         if not candidates:
-            return "Keine relevanten Dokumente gefunden. Bitte indizieren Sie zuerst Dateien im Tresor."
+            return "Keine relevanten Dokumente gefunden. Indexiere zuerst Dateien in deinem Tresor."
 
-        top = candidates[:3]
-        sources = sorted({entry["source"] for entry in top})
-        summary_lines = [
-            f"Ich habe relevante Informationen in {len(top)} Dokumenten gefunden, unter anderem aus: {', '.join(sources)}."
-        ]
+        # Baue Context aus Top-Dokumenten
+        context_parts = []
+        for i, doc in enumerate(candidates[:3], 1):
+            context_parts.append(f"Dokument {i}: {doc['document_name']}")
+            context_parts.append(doc['text'][:2000])  # Max 2000 chars pro Doc
+            context_parts.append("")
+        
+        context = "\n".join(context_parts)
 
-        for entry in top:
-            summary_lines.append(
-                f"- {entry['document_name']} (Score: {entry['score']:.2f}): {entry['snippet']}"
-            )
+        # Prompt für LLM
+        prompt = f"""Du bist ein hilfsbereiter Assistent, der Fragen zu verschlüsselten Dokumenten beantwortet.
 
-        if len(candidates) > 3:
-            remaining = len(candidates) - 3
-            summary_lines.append(f"Weitere {remaining} Dokumente enthalten ebenfalls relevante Treffer.")
+Basierend auf den folgenden Dokumenten, beantworte die Frage des Nutzers natürlich und conversational:
 
-        summary_lines.append("\nDiese Antwort wurde lokal aus Ihren indizierten Dokumenten generiert.")
-        return header + "\n".join(summary_lines)
+---DOKUMENTE START---
+{context}
+---DOKUMENTE END---
+
+Nutzerfrage: {question}
+
+Antworte natürlich und prägnant. Beziehe dich auf die Dokumente."""
+
+        # Generiere mit LLM
+        answer = self.llm.generate(prompt, temperature=0.7)
+        
+        if not answer or answer.startswith("[Fehler"):
+            # Fallback zu einfacher Zusammenfassung
+            return self._generate_answer_fallback(question, candidates)
+        
+        return answer
+
+    def _generate_answer_fallback(self, question: str, candidates: List[Dict[str, Any]]) -> str:
+        """Fallback wenn LLM nicht verfügbar."""
+        if not candidates:
+            return "Keine relevanten Dokumente gefunden."
+
+        lines = ["Basierend auf deinen Dokumenten:"]
+        
+        for i, doc in enumerate(candidates, 1):
+            lines.append(f"\n**{i}. {doc['document_name']}**")
+            lines.append(doc['snippet'])
+        
+        return "\n".join(lines)
 
     def answer_question(self, question: str) -> str:
+        """Beantworte Frage mit LLM oder Fallback."""
         if not question.strip():
-            return "Bitte stellen Sie eine Frage."
+            return "Stelle eine Frage zu deinen indizierten Dokumenten."
 
         candidates = self.search_documents(question)
-        return self._generate_answer(question, candidates)
+        
+        if self.llm.is_available():
+            return self._generate_answer_with_llm(question, candidates)
+        else:
+            return self._generate_answer_fallback(question, candidates)
 
     def index_container(self, container_path: str, meta: Dict[str, Any], master_key: bytes) -> List[str]:
+        """Indexiere alle Dateien aus verschlossenem Container."""
         if not container_path or not meta or master_key is None:
-            raise ValueError("Containerpfad, Metadaten und Master-Key werden benötigt.")
+            raise ValueError("Container-Pfad, Metadaten und Master-Key erforderlich.")
 
         indexed: List[str] = []
+        skipped: List[Dict[str, str]] = []
+        
         with open(container_path, "rb") as fh:
             for entry in meta.get("files", []):
                 name = entry.get("name")
+                if not name:
+                    skipped.append({"name": "<unbekannt>", "reason": "Dateiname fehlt"})
+                    continue
+                
                 ext = os.path.splitext(name)[1].lower()
                 if ext not in self.config.allowed_extensions:
+                    skipped.append({"name": name, "reason": f"Typ '{ext}' nicht unterstützt"})
                     continue
+                
                 fh.seek(entry.get("offset", 0))
                 blob = fh.read(entry.get("length", 0))
+                
                 if not blob:
+                    skipped.append({"name": name, "reason": "Leerer Blob"})
                     continue
+                
                 try:
                     raw = self._decrypt_blob_in_memory(blob, master_key, name)
-                except Exception:
+                except Exception as exc:
+                    skipped.append({"name": name, "reason": f"Entschlüsselung fehlgeschlagen"})
                     continue
+                
                 text = self._extract_text(name, raw)
                 if not text.strip():
+                    reason = self._last_extraction_error or "Kein Text extrahierbar"
+                    skipped.append({"name": name, "reason": reason})
                     continue
+                
                 self.index_text(
                     name,
                     text,
@@ -407,7 +743,9 @@ class EncryptIntelligenceManager:
                         "filename": name,
                         "size": len(raw),
                         "extension": ext,
-                    },
+                    }
                 )
                 indexed.append(name)
+
+        self.last_index_report = {"indexed": indexed, "skipped": skipped}
         return indexed

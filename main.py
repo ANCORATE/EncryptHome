@@ -2211,11 +2211,16 @@ class App(QWidget):
         self._settings_dialog.activateWindow()
 
     def show_intelligence_dialog(self):
+        if self.intelligence_manager is None:
+            self.intelligence_manager = EncryptIntelligenceManager()
+
         if not hasattr(self, "_intelligence_dialog") or self._intelligence_dialog is None:
             self._intelligence_dialog = EncryptIntelligenceDialog(
                 self,
-                manager=self.intelligence_manager if self.intelligence_manager is not None else None,
+                manager=self.intelligence_manager,
             )
+        else:
+            self._intelligence_dialog.manager = self.intelligence_manager
 
         self._intelligence_dialog.show()
         self._intelligence_dialog.raise_()
@@ -2316,7 +2321,14 @@ class App(QWidget):
                 if self.intelligence_manager is None:
                     self.intelligence_manager = EncryptIntelligenceManager()
             else:
-                self.intelligence_manager = None
+                if not hasattr(self, "_intelligence_dialog") or self._intelligence_dialog is None:
+                    self.intelligence_manager = None
+            if (
+                hasattr(self, "_intelligence_dialog")
+                and self._intelligence_dialog is not None
+                and self.intelligence_manager is not None
+            ):
+                self._intelligence_dialog.manager = self.intelligence_manager
             print("[SETTINGS] Verhaltens-Einstellungen aktualisiert")
         except Exception as e:
             print(f"[SETTINGS] Verhaltens-Fehler: {e}")

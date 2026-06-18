@@ -1,6 +1,7 @@
 from base import *
 import os
 import json
+import sys
 import tempfile
 import threading
 from cryptography.exceptions import InvalidTag, InvalidSignature
@@ -11,7 +12,6 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 CHUNK = 128 * 1024
 
-from main import load_device_key
 from base import derive_subkey
 
 def decrypt_key(path: str) -> bytes:
@@ -37,10 +37,9 @@ def decrypt_key(path: str) -> bytes:
         )
 
     # --- Optional: Device-Key (z. B. aus Hardware-ID) ---
-    try:
-        device_key = load_device_key()
-    except (ImportError, NameError):
-        device_key = None
+    main_module = sys.modules.get("__main__") or sys.modules.get("main")
+    load_device_key_func = getattr(main_module, "load_device_key", None)
+    device_key = load_device_key_func() if callable(load_device_key_func) else None
 
     adder = device_key[-1] if device_key else 0
 
