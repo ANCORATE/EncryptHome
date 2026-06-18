@@ -6,7 +6,9 @@ ChatGPT-ähnliches Interface mit:
 - Loading-State während LLM antwortet
 """
 
-from PyQt6.QtCore import Qt, QTimer
+from pathlib import Path
+
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -162,10 +164,16 @@ class EncryptIntelligenceDialog(QDialog):
     def _update_llm_status(self) -> None:
         """Überprüfe LLM-Verfügbarkeit und aktualisiere Status."""
         if self.manager.llm.is_available():
-            self.llm_status.setText(f"✓ LLM aktiv ({self.manager.config.ollama_model})")
+            model_name = self.manager.llm.model_path.stem
+            backend = self.manager.llm.backend_name()
+            backend_label = backend.replace("_", "-") if backend else "unbekannt"
+            self.llm_status.setText(f"✓ LLM aktiv ({model_name}, {backend_label})")
             self.llm_status.setStyleSheet("color: #4ade80;")
         else:
-            self.llm_status.setText("⚠ LLM offline (Fallback aktiv)")
+            model_name = Path(self.manager.config.llm_model_path).name
+            load_error = self.manager.llm.load_error()
+            detail = f": {load_error}" if load_error else ""
+            self.llm_status.setText(f"⚠ LLM offline ({model_name}){detail}")
             self.llm_status.setStyleSheet("color: #facc15;")
 
     def _on_send_question(self) -> None:

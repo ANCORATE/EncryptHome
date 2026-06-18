@@ -1,4 +1,4 @@
-"""Kernfunktionalität für EncryptIntelligence mit Ollama LLM-Integration.
+"""Kernfunktionalität für EncryptIntelligence mit lokalem LLM.
 
 Lokale Dokumentenindexierung, RAG mit LLM-Antwortgenerierung und intelligente
 Reminder-Extraktion – komplett offline.
@@ -22,9 +22,32 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from xml.etree import ElementTree
 
-from llama_cpp import Llama
-from sentence_transformers import SentenceTransformer
-import numpy as np
+try:
+    import numpy as np
+except Exception as exc:
+    np = None
+    NUMPY_IMPORT_ERROR = str(exc)
+else:
+    NUMPY_IMPORT_ERROR = ""
+
+try:
+    from sentence_transformers import SentenceTransformer
+except Exception as exc:
+    SentenceTransformer = None
+    EMBEDDING_IMPORT_ERROR = str(exc)
+else:
+    EMBEDDING_IMPORT_ERROR = ""
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_LLM_MODEL = "EncryptIntelligence-v1.gguf"
+
+
+def _resolve_llm_model_path(model_path: str) -> Path:
+    """Löse LLM-Modellpfad relativ zum Projektroot auf."""
+    candidate = Path(model_path or _DEFAULT_LLM_MODEL)
+    if not candidate.is_absolute():
+        candidate = _PROJECT_ROOT / candidate
+    return candidate.resolve()
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -70,6 +93,9 @@ else:
     TESSERACT_IMPORT_ERROR = ""
 
 class LocalLLMClient:
+    _BACKEND_GPT4ALL = "gpt4all"
+    _BACKEND_LLAMA_CPP = "llama_cpp"
+
     def __init__(
         self,
         model_path: str,
@@ -77,22 +103,63 @@ class LocalLLMClient:
     ):
         self._available = False
         self.llm = None
+        self._backend: Optional[str] = None
+        self._load_error = ""
+        self.model_path = _resolve_llm_model_path(model_path)
 
+        if not self.model_path.exists():
+            self._load_error = f"Modell nicht gefunden: {self.model_path}"
+            return
+
+        if self._try_load_gpt4all(context_length):
+            return
+        self._try_load_llama_cpp(context_length)
+
+    def _try_load_gpt4all(self, context_length: int) -> bool:
         try:
+            from gpt4all import GPT4All
+
+            self.llm = GPT4All(
+                model_name=self.model_path.name,
+                model_path=str(self.model_path.parent),
+                model_type="gguf",
+                allow_download=False,
+                n_ctx=context_length,
+            )
+            self._available = True
+            self._backend = self._BACKEND_GPT4ALL
+            return True
+        except Exception as exc:
+            self._load_error = str(exc)
+            self.llm = None
+            return False
+
+    def _try_load_llama_cpp(self, context_length: int) -> None:
+        try:
+            from llama_cpp import Llama
+
             self.llm = Llama(
-                model_path=model_path,
+                model_path=str(self.model_path),
                 n_ctx=context_length,
                 n_gpu_layers=-1,
                 verbose=False,
             )
-
             self._available = True
-
-        except Exception:
+            self._backend = self._BACKEND_LLAMA_CPP
+        except Exception as exc:
+            if not self._load_error:
+                self._load_error = str(exc)
+            self.llm = None
             self._available = False
 
     def is_available(self) -> bool:
         return self._available
+
+    def load_error(self) -> str:
+        return self._load_error
+
+    def backend_name(self) -> str:
+        return self._backend or ""
 
     def generate(
         self,
@@ -105,15 +172,22 @@ class LocalLLMClient:
         if not self._available:
             return ""
 
-        full_prompt = f"{context}\n\n{prompt}"
+        full_prompt = f"{context}\n\n{prompt}" if context else prompt
 
         try:
+            if self._backend == self._BACKEND_GPT4ALL:
+                response = self.llm.generate(
+                    full_prompt,
+                    max_tokens=max_tokens,
+                    temp=temperature,
+                )
+                return response.strip()
+
             response = self.llm(
                 full_prompt,
                 max_tokens=max_tokens,
-                temperature=temperature
+                temperature=temperature,
             )
-
             return response["choices"][0]["text"].strip()
 
         except Exception as exc:
@@ -269,9 +343,7 @@ class EncryptIntelligenceConfig:
     
     storage_dir: Path = Path(os.path.expanduser("~")) / ".ancorate" / "encrypt_intelligence"
     index_name: str = "encrypt_intelligence_index"
-    llm_model_path: str = (
-        "models/qwen3-8b-q4_k_m.gguf"
-    )
+    llm_model_path: str = _DEFAULT_LLM_MODEL
 
     embedding_model: str = (
         "sentence-transformers/all-MiniLM-L6-v2"
@@ -307,13 +379,34 @@ class EncryptIntelligenceManager:
             self.config.llm_model_path
         )
 
-        self.embedding_model = SentenceTransformer(
-            self.config.embedding_model
-        )
+        self.embedding_model = None
+        self._embedding_error = EMBEDDING_IMPORT_ERROR
+        if SentenceTransformer is not None:
+            try:
+                self.embedding_model = SentenceTransformer(
+                    self.config.embedding_model
+                )
+            except Exception as exc:
+                self._embedding_error = str(exc)
         
         self._legacy_storage_key = self._load_legacy_storage_key()
         self._storage_key = self._derive_storage_key()
         self._load_storage()
+        self._normalize_loaded_embeddings()
+
+    def _normalize_loaded_embeddings(self) -> None:
+        if np is None:
+            return
+        for doc in self._storage.get("documents", {}).values():
+            embedding = doc.get("embedding")
+            if embedding is not None and not isinstance(embedding, np.ndarray):
+                doc["embedding"] = np.asarray(embedding, dtype=np.float32)
+
+    def embeddings_available(self) -> bool:
+        return self.embedding_model is not None
+
+    def embedding_error(self) -> str:
+        return self._embedding_error
 
     def _derive_storage_key(self) -> bytes:
         """Derive device-bound key für lokalen Index."""
@@ -370,6 +463,7 @@ class EncryptIntelligenceManager:
         try:
             payload = self._decrypt_blob(raw)
             self._storage = json.loads(payload.decode("utf-8"))
+            self._normalize_loaded_embeddings()
             self._remove_legacy_storage_key()
         except Exception:
             if self._legacy_storage_key is None:
@@ -378,6 +472,7 @@ class EncryptIntelligenceManager:
             try:
                 payload = self._decrypt_blob(raw, self._legacy_storage_key)
                 self._storage = json.loads(payload.decode("utf-8"))
+                self._normalize_loaded_embeddings()
                 self._save_storage()
                 self._remove_legacy_storage_key()
             except Exception:
@@ -399,6 +494,11 @@ class EncryptIntelligenceManager:
         self,
         text: str
     ) -> np.ndarray:
+        if self.embedding_model is None:
+            raise RuntimeError(
+                self._embedding_error
+                or "sentence-transformers ist nicht installiert"
+            )
 
         return self.embedding_model.encode(
             text,
@@ -425,14 +525,19 @@ class EncryptIntelligenceManager:
                         check=False,
                         timeout=30
                     )
+                except Exception:
+                    result = None
                 finally:
                     try:
                         os.remove(tmp_path)
                     except Exception:
                         pass
                 
-                if result.returncode != 0:
-                    self._last_extraction_error = result.stderr.decode("utf-8", errors="ignore").strip()
+                if result is None or result.returncode != 0:
+                    if result is not None:
+                        self._last_extraction_error = result.stderr.decode("utf-8", errors="ignore").strip()
+                    else:
+                        self._last_extraction_error = "PDF-Konvertierung fehlgeschlagen"
                     return ""
                 return result.stdout.decode("utf-8", errors="ignore")
             except Exception as exc:
@@ -578,7 +683,7 @@ class EncryptIntelligenceManager:
             "id": document_id,
             "text": normalized,
             "metadata": metadata,
-            "embedding": embedding,
+            "embedding": embedding.tolist(),
             "document_name": document_name,
             "source": source,
             "display_name": f"{document_name}",
@@ -601,7 +706,10 @@ class EncryptIntelligenceManager:
         results: List[Dict[str, Any]] = []
         
         for doc in self._storage["documents"].values():
-            score = _cosine_similarity(query_embedding, doc["embedding"])
+            doc_embedding = doc["embedding"]
+            if not isinstance(doc_embedding, np.ndarray):
+                doc_embedding = np.asarray(doc_embedding, dtype=np.float32)
+            score = _cosine_similarity(query_embedding, doc_embedding)
             if score <= 0:
                 continue
 
@@ -623,7 +731,7 @@ class EncryptIntelligenceManager:
         """Hole alle extrahierten Erinnerungen."""
         return self._storage.get("reminders", [])
 
-    def capability_status(self) -> Dict[str, bool]:
+    def capability_status(self) -> Dict[str, Any]:
         """Gebe Parser-Status und LLM-Status zurück."""
         pdftotext_available = shutil.which("pdftotext") is not None
         return {
@@ -631,12 +739,17 @@ class EncryptIntelligenceManager:
             "docx": True,
             "ocr": Image is not None and _tesseract_available(),
             "llm": self.llm.is_available(),
+            "llm_backend": self.llm.backend_name(),
+            "llm_model": str(self.llm.model_path),
+            "llm_error": self.llm.load_error(),
+            "embeddings": self.embeddings_available(),
+            "embedding_error": self.embedding_error() or NUMPY_IMPORT_ERROR,
             "fitz_error": FITZ_IMPORT_ERROR,
             "docx_error": DOCX_IMPORT_ERROR,
         }
 
     def _generate_answer_with_llm(self, question: str, candidates: List[Dict[str, Any]]) -> str:
-        """Generiere natürliche Antwort mit Ollama LLM."""
+        """Generiere natürliche Antwort mit lokalem LLM."""
         if not candidates:
             return "Keine relevanten Dokumente gefunden. Indexiere zuerst Dateien in deinem Tresor."
 
@@ -665,7 +778,7 @@ Antworte natürlich und prägnant. Beziehe dich auf die Dokumente."""
         # Generiere mit LLM
         answer = self.llm.generate(prompt, temperature=0.7)
         
-        if not answer or answer.startswith("[Fehler"):
+        if not answer or answer.startswith("[LLM Fehler"):
             # Fallback zu einfacher Zusammenfassung
             return self._generate_answer_fallback(question, candidates)
         
@@ -745,6 +858,7 @@ Antworte natürlich und prägnant. Beziehe dich auf die Dokumente."""
                         "extension": ext,
                     }
                 )
+
                 indexed.append(name)
 
         self.last_index_report = {"indexed": indexed, "skipped": skipped}
