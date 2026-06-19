@@ -144,7 +144,6 @@ class LocalLLMClient:
     """Lokaler LLM mit Streaming-Support."""
     
     _BACKEND_GPT4ALL = "gpt4all"
-    _BACKEND_LLAMA_CPP = "llama_cpp"
 
     def __init__(self, model_path: str, context_length: int = 8192):
         self._available = False
@@ -157,37 +156,7 @@ class LocalLLMClient:
             self._load_error = f"Modell nicht gefunden: {self.model_path}"
             return
 
-        if self._try_load_gpt4all(context_length):
-            return
-
-        gpt4all_missing = "gpt4all" in self._load_error and "nicht installiert" in self._load_error
-        if gpt4all_missing:
-            return
-
-        self._try_load_llama_cpp(context_length)
-
-    def _try_load_llama_cpp(self, context_length: int) -> bool:
-        try:
-            from llama_cpp import Llama
-        except ImportError:
-            self._load_error = "llama-cpp-python nicht installiert"
-            return False
-
-        try:
-            self.llm = Llama(
-                model_path=str(self.model_path),
-                n_ctx=context_length,
-                n_gpu_layers=0,
-                verbose=False,
-            )
-            self._available = True
-            self._backend = self._BACKEND_LLAMA_CPP
-            return True
-        except Exception as exc:
-            if not self._load_error:
-                self._load_error = str(exc)
-            self.llm = None
-            return False
+        self._try_load_gpt4all(context_length)
 
     def _try_load_gpt4all(self, context_length: int) -> bool:
         try:
@@ -239,26 +208,14 @@ class LocalLLMClient:
         full_prompt = f"{context}\n\n{prompt}" if context else prompt
 
         try:
-            if self._backend == self._BACKEND_GPT4ALL:
-                response = self.llm.generate(
-                    full_prompt,
-                    max_tokens=max_tokens,
-                    temp=temperature,
-                )
-                if on_token:
-                    on_token(response.strip())
-                return response.strip()
-
-            response = self.llm(
+            response = self.llm.generate(
                 full_prompt,
                 max_tokens=max_tokens,
-                temperature=temperature,
+                temp=temperature,
             )
-            text = response["choices"][0]["text"].strip()
             if on_token:
-                on_token(text)
-            return text
-
+                on_token(response.strip())
+            return response.strip()
         except Exception as exc:
             return f"[LLM Fehler: {exc}]"
 
