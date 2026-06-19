@@ -41,12 +41,6 @@ from utilities.checksum_check import *
 from utilities.header_utils import *
 from utilities.settings import *
 
-# EncryptIntelligence
-from intelligence import (
-    DeferredManagerInitializer,
-    EncryptIntelligenceDialog,
-)
-
 # -------------------------------------------------------------------------------------------------------------------
 
 
@@ -2221,6 +2215,7 @@ class App(QWidget):
         if self.intelligence_manager is not None:
             return
         if self._intelligence_initializer is None:
+            from intelligence.lazy_loading import DeferredManagerInitializer
             self._intelligence_initializer = DeferredManagerInitializer()
             self._intelligence_initializer.start()
 
@@ -2260,6 +2255,7 @@ class App(QWidget):
             return
 
         if not hasattr(self, "_intelligence_dialog") or self._intelligence_dialog is None:
+            from intelligence.ui import EncryptIntelligenceDialog
             self._intelligence_dialog = EncryptIntelligenceDialog(
                 self,
                 manager=manager,
