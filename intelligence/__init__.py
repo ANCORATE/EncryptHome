@@ -5,10 +5,12 @@ Alle Funktionen werden lokal ausgeführt und arbeiten ausschließlich mit versch
 """
 
 from .core import EncryptIntelligenceConfig, EncryptIntelligenceManager
+from .lazy_loading import DeferredManagerInitializer
 from .ui import EncryptIntelligenceDialog
 
 __all__ = [
     "EncryptIntelligenceConfig",
     "EncryptIntelligenceManager",
+    "DeferredManagerInitializer",
     "EncryptIntelligenceDialog",
 ]

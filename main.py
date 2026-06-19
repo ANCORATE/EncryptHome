@@ -42,7 +42,10 @@ from utilities.header_utils import *
 from utilities.settings import *
 
 # EncryptIntelligence
-from intelligence import EncryptIntelligenceDialog, EncryptIntelligenceManager
+from intelligence import (
+    DeferredManagerInitializer,
+    EncryptIntelligenceDialog,
+)
 
 # -------------------------------------------------------------------------------------------------------------------
 
@@ -1849,7 +1852,10 @@ class App(QWidget):
         self._settings_dialog = None
         self.update_worker = None
         self.intelligence_manager = None
+        self._intelligence_initializer = None
         self.data = load_settings()
+        if self.data.get("encrypt_intelligence_enabled", False):
+            self._start_intelligence_init()
         # Vorschau-Cache (RAM): LRU-Cache für bereits entschlüsselte Bytes
         self._preview_cache: OrderedDict[str, tuple[bytes, object]] = OrderedDict()
         self._preview_cache_bytes: int = 0
@@ -2210,17 +2216,56 @@ class App(QWidget):
         self._settings_dialog.raise_()
         self._settings_dialog.activateWindow()
 
+    def _start_intelligence_init(self):
+        """Starte den EncryptIntelligence-Manager im Hintergrund (non-blocking)."""
+        if self.intelligence_manager is not None:
+            return
+        if self._intelligence_initializer is None:
+            self._intelligence_initializer = DeferredManagerInitializer()
+            self._intelligence_initializer.start()
+
+    def _reset_intelligence_init(self):
+        """Verwerfe Manager und laufende Hintergrund-Initialisierung."""
+        self.intelligence_manager = None
+        self._intelligence_initializer = None
+
+    def _get_intelligence_manager(self, block=True):
+        """Hole den Manager über die Hintergrund-Initialisierung.
+
+        block=True wartet, bis der Manager bereit ist (z. B. beim Öffnen des
+        Dialogs); block=False liefert None, solange das Laden läuft (z. B. für
+        die Sucheinbindung), damit die UI nicht blockiert.
+        """
+        if self.intelligence_manager is not None:
+            return self.intelligence_manager
+
+        self._start_intelligence_init()
+        initializer = self._intelligence_initializer
+
+        if not block and not initializer.is_ready():
+            return None
+
+        self.intelligence_manager = initializer.get_manager()
+        return self.intelligence_manager
+
     def show_intelligence_dialog(self):
-        if self.intelligence_manager is None:
-            self.intelligence_manager = EncryptIntelligenceManager()
+        try:
+            manager = self._get_intelligence_manager()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "EncryptIntelligence",
+                f"EncryptIntelligence konnte nicht geladen werden: {e}",
+            )
+            return
 
         if not hasattr(self, "_intelligence_dialog") or self._intelligence_dialog is None:
             self._intelligence_dialog = EncryptIntelligenceDialog(
                 self,
-                manager=self.intelligence_manager,
+                manager=manager,
             )
         else:
-            self._intelligence_dialog.manager = self.intelligence_manager
+            self._intelligence_dialog.manager = manager
 
         self._intelligence_dialog.show()
         self._intelligence_dialog.raise_()
@@ -2319,10 +2364,10 @@ class App(QWidget):
             self.data = settings
             if self.data.get("encrypt_intelligence_enabled", False):
                 if self.intelligence_manager is None:
-                    self.intelligence_manager = EncryptIntelligenceManager()
+                    self._start_intelligence_init()
             else:
                 if not hasattr(self, "_intelligence_dialog") or self._intelligence_dialog is None:
-                    self.intelligence_manager = None
+                    self._reset_intelligence_init()
             if (
                 hasattr(self, "_intelligence_dialog")
                 and self._intelligence_dialog is not None
@@ -3418,18 +3463,20 @@ Mögliche Ursache
 
         if self.data.get("encrypt_intelligence_enabled", False) and self.data.get(
             "encrypt_intelligence_search_integration", False
-        ) and self.intelligence_manager is not None:
-            try:
-                self.intelligence_manager.reload_storage()
-            except Exception:
-                pass
-            results = self.intelligence_manager.search_documents(query)
-            if results:
-                self.refresh_list(searching=True, intelligence_results=results)
-                self.status.setText(
-                    f"EncryptIntelligence: {len(results)} relevante Dokument(e) gefunden."
-                )
-                return
+        ):
+            manager = self._get_intelligence_manager(block=False)
+            if manager is not None:
+                try:
+                    manager.reload_storage()
+                except Exception:
+                    pass
+                results = manager.search_documents(query)
+                if results:
+                    self.refresh_list(searching=True, intelligence_results=results)
+                    self.status.setText(
+                        f"EncryptIntelligence: {len(results)} relevante Dokument(e) gefunden."
+                    )
+                    return
 
         self.refresh_list(True)
     
