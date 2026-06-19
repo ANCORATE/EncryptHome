@@ -1,7 +1,4 @@
 """Lazy Loading Module für EncryptIntelligence - verhindert blocking Imports.
-
-Problem: LocalLLMClient wird bei import() sofort initialisiert
-Lösung: Lazy Loading mit Deferred Initialization
 """
 
 from typing import Optional, Any
