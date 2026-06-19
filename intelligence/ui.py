@@ -310,7 +310,7 @@ class EncryptIntelligenceDialog(QDialog):
             model = self.manager.llm.model_path.stem
             backend = self.manager.llm.backend_name().replace("_", "-")
             self.llm_status.setText(f"✓ LLM ({model}, {backend})")
-            self.llm_status.setStyleSheet("color: #4ade80;")
+            self.llm_status.setStyleSheet("color: #10b981;")
         else:
             error = (self.manager.llm.load_error() or "offline")[:30]
             self.llm_status.setText(f"⚠ LLM ({error}...)")
@@ -338,7 +338,7 @@ class EncryptIntelligenceDialog(QDialog):
             return
 
         # Zeige Frage
-        self.chat_display.append(f"<b style='color:#4ade80'>Du:</b> {question}\n")
+        self.chat_display.append(f"<b style='color:#3f8cff'>Du:</b> {question}\n")
         self.chat_input.clear()
         self.send_button.setEnabled(False)
         self.status_bar.setVisible(True)
@@ -359,7 +359,7 @@ class EncryptIntelligenceDialog(QDialog):
 
     def _on_response_done(self, answer: str) -> None:
         """Verarbeite fertige Antwort."""
-        self.chat_display.append(f"\n<b style='color:#2f6f73'>EncryptIntelligence:</b>\n{answer}\n")
+        self.chat_display.append(f"\n<b style='color:#2f7cf6'>EncryptIntelligence:</b>\n{answer}\n")
         self.send_button.setEnabled(True)
         self.status_bar.setVisible(False)
         self._refresh_sidebar()
@@ -502,103 +502,113 @@ class EncryptIntelligenceDialog(QDialog):
     def _stylesheet(self) -> str:
         return """
             QDialog {
-                background: #0f1319;
-                color: #e7edf2;
+                background: #0b0f16;
+                color: #e6eef8;
             }
 
             QLabel#eiChatHeader {
                 font-size: 28px;
                 font-weight: 700;
-                color: #f4f8fb;
+                color: #ffffff;
             }
 
             QLabel#eiSidebarHeader {
                 font-size: 11px;
                 font-weight: 700;
-                color: #94a3af;
+                color: #9fb0d8;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
             }
 
             QTextEdit#eiChatDisplay {
-                background: #0f1319;
+                background: #0b0f16;
                 border: none;
-                color: #e7edf2;
+                color: #e6eef8;
                 font-size: 13px;
                 padding: 0;
-                selection-background-color: #2f6f73;
+                selection-background-color: #163a73;
             }
 
             QTextEdit#eiChatInput {
-                background: #181d22;
-                border: 1px solid #2b333b;
-                border-radius: 8px;
-                color: #e7edf2;
+                background: #111827;
+                border: 1px solid rgba(255,255,255,0.06);
+                border-radius: 10px;
+                color: #e6eef8;
                 font-size: 13px;
                 padding: 10px;
             }
 
             QTextEdit#eiChatInput:focus {
-                border: 1px solid #3f8b90;
+                border: 1px solid #2a78ff;
+                background: #13203a;
             }
 
             QPushButton#eiSendButton,
             QPushButton#eiClearButton {
-                background: #2f6f73;
-                border: none;
-                border-radius: 6px;
-                color: #f4f8fb;
-                font-weight: 500;
-                padding: 10px 16px;
+                background: #0f1522;
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 10px;
+                color: #ffffff;
+                font-weight: 600;
+                padding: 9px 16px;
                 font-size: 13px;
+                min-height: 36px;
             }
 
             QPushButton#eiSendButton:hover,
             QPushButton#eiClearButton:hover {
-                background: #39838a;
+                background: #121a2b;
+                border: 1px solid #2a78ff;
             }
 
             QPushButton#eiSendButton:pressed,
             QPushButton#eiClearButton:pressed {
-                background: #26575a;
+                background: #0b1220;
+                border: 1px solid #1f5ed6;
             }
 
             QPushButton#eiSendButton:disabled {
-                background: #1a3f42;
-                color: #6b8185;
+                background: #0b0f16;
+                color: #3a4152;
+                border: 1px solid #1a1f2a;
             }
 
             QPushButton#eiIndexButton {
-                background: #2f6f73;
+                background: #2f7cf6;
                 border: none;
-                border-radius: 6px;
-                color: #f4f8fb;
-                font-weight: 500;
+                border-radius: 10px;
+                color: white;
+                font-weight: 700;
                 padding: 10px;
                 font-size: 12px;
+                min-height: 36px;
             }
 
             QPushButton#eiIndexButton:hover {
-                background: #39838a;
+                background: #3f8cff;
+            }
+
+            QPushButton#eiIndexButton:pressed {
+                background: #2265d1;
             }
 
             QFrame#eiSidebar {
-                background: #0f1319;
-                border-left: 1px solid #2b333b;
+                background: #0b0f16;
+                border-left: 1px solid rgba(255,255,255,0.06);
             }
 
             QLabel#eiStatusText {
                 font-size: 12px;
-                color: #b8c7d3;
+                color: #cfd8ea;
             }
 
             QListWidget#eiDocList,
             QListWidget#eiSearchList,
             QListWidget#eiReminderList {
-                background: #181d22;
-                border: 1px solid #2b333b;
-                border-radius: 6px;
-                color: #e7edf2;
+                background: #111827;
+                border: 1px solid rgba(255,255,255,0.06);
+                border-radius: 10px;
+                color: #e6eef8;
                 font-size: 12px;
                 outline: none;
             }
@@ -607,59 +617,60 @@ class EncryptIntelligenceDialog(QDialog):
             QListWidget#eiSearchList::item,
             QListWidget#eiReminderList::item {
                 padding: 8px 10px;
-                border-bottom: 1px solid #2b333b;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
             }
 
             QListWidget#eiDocList::item:selected,
             QListWidget#eiSearchList::item:selected,
             QListWidget#eiReminderList::item:selected {
-                background: #263d40;
-                color: #4ade80;
+                background: #163a73;
+                color: white;
             }
 
             QLineEdit#eiSearchInput {
-                background: #181d22;
-                border: 1px solid #2b333b;
-                border-radius: 6px;
-                color: #e7edf2;
+                background: #111827;
+                border: 1px solid rgba(255,255,255,0.06);
+                border-radius: 10px;
+                color: #e6eef8;
                 font-size: 12px;
-                padding: 8px 10px;
+                padding: 9px 12px;
             }
 
             QLineEdit#eiSearchInput:focus {
-                border: 1px solid #3f8b90;
+                border: 1px solid #2a78ff;
+                background: #13203a;
             }
 
             QTabWidget#eiSidebarTabs {
-                background: #0f1319;
+                background: #0b0f16;
                 border: none;
             }
 
             QTabBar::tab {
-                background: #181d22;
-                border: 1px solid #2b333b;
-                color: #b8c7d3;
-                padding: 6px 12px;
+                background: #111827;
+                border: 1px solid rgba(255,255,255,0.06);
+                color: #cfd8ea;
+                padding: 8px 14px;
                 margin: 2px;
-                border-radius: 4px;
+                border-radius: 10px;
             }
 
             QTabBar::tab:selected {
-                background: #2f6f73;
-                color: #f4f8fb;
-                border: 1px solid #3f8b90;
+                background: #163a73;
+                color: white;
+                border: 1px solid #2a78ff;
             }
 
             QProgressBar#eiStatusBar {
-                background: #181d22;
-                border: 1px solid #2b333b;
-                border-radius: 4px;
+                background: #111827;
+                border: 1px solid rgba(255,255,255,0.06);
+                border-radius: 10px;
                 height: 6px;
                 text-align: center;
             }
 
             QProgressBar#eiStatusBar::chunk {
-                background: #2f6f73;
-                border-radius: 3px;
+                background: #2f7cf6;
+                border-radius: 5px;
             }
         """

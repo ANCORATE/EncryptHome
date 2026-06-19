@@ -157,14 +157,14 @@ class LocalLLMClient:
             self._load_error = f"Modell nicht gefunden: {self.model_path}"
             return
 
-        if self._try_load_llama_cpp(context_length):
+        if self._try_load_gpt4all(context_length):
             return
 
-        llama_cpp_missing = self._load_error == "llama-cpp-python nicht installiert"
-        if llama_cpp_missing:
+        gpt4all_missing = "gpt4all" in self._load_error and "nicht installiert" in self._load_error
+        if gpt4all_missing:
             return
 
-        self._try_load_gpt4all(context_length)
+        self._try_load_llama_cpp(context_length)
 
     def _try_load_llama_cpp(self, context_length: int) -> bool:
         try:
@@ -189,10 +189,14 @@ class LocalLLMClient:
             self.llm = None
             return False
 
-    def _try_load_gpt4all(self, context_length: int) -> None:
+    def _try_load_gpt4all(self, context_length: int) -> bool:
         try:
             from gpt4all import GPT4All
+        except ImportError:
+            self._load_error = "gpt4all nicht installiert"
+            return False
 
+        try:
             self.llm = GPT4All(
                 model_name=self.model_path.name,
                 model_path=str(self.model_path.parent),
@@ -203,11 +207,13 @@ class LocalLLMClient:
             )
             self._available = True
             self._backend = self._BACKEND_GPT4ALL
+            return True
         except Exception as exc:
             if not self._load_error:
                 self._load_error = str(exc)
             self.llm = None
             self._available = False
+            return False
 
     def is_available(self) -> bool:
         return self._available
