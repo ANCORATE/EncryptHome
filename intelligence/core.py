@@ -735,7 +735,11 @@ class EncryptIntelligenceManager:
     def index_text(self, document_name: str, text: str, metadata: Dict[str, Any]) -> None:
         """Indexiere Text mit Embedding."""
         normalized = _normalize_text(text)
-        embedding = self._embed(normalized)
+        try:
+            embedding = self._embed(normalized)
+            embedding_list = embedding.tolist()
+        except Exception:
+            embedding_list = None
         source = metadata.get("source", "unbekannt")
         document_id = self._make_document_id(document_name, source)
 
@@ -744,7 +748,7 @@ class EncryptIntelligenceManager:
                 "id": document_id,
                 "text": normalized,
                 "metadata": metadata,
-                "embedding": embedding.tolist(),
+                "embedding": embedding_list,
                 "document_name": document_name,
                 "source": source,
                 "display_name": f"{document_name}",
@@ -765,11 +769,16 @@ class EncryptIntelligenceManager:
 
     def search_documents(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """Suche Dokumente mit Ranking."""
-        query_embedding = self._embed(query)
+        try:
+            query_embedding = self._embed(query)
+        except Exception:
+            return []
         results: List[Dict[str, Any]] = []
         
         for doc in self._storage["documents"].values():
-            doc_embedding = doc["embedding"]
+            doc_embedding = doc.get("embedding")
+            if doc_embedding is None:
+                continue
             if not isinstance(doc_embedding, np.ndarray):
                 doc_embedding = np.asarray(doc_embedding, dtype=np.float32)
             score = _cosine_similarity(query_embedding, doc_embedding)
