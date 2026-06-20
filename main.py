@@ -1846,7 +1846,6 @@ class App(QWidget):
         self._settings_dialog = None
         self.update_worker = None
         self.intelligence_manager = None
-        self._intelligence_initializer = None
         self.data = load_settings()
         if self.data.get("encrypt_intelligence_enabled", False):
             self._start_intelligence_init()
@@ -2211,54 +2210,38 @@ class App(QWidget):
         self._settings_dialog.activateWindow()
 
     def _start_intelligence_init(self):
-        """Starte den EncryptIntelligence-Manager im Hintergrund (non-blocking)."""
         if self.intelligence_manager is not None:
             return
-        if self._intelligence_initializer is None:
-            from intelligence.lazy_loading import DeferredManagerInitializer
-            self._intelligence_initializer = DeferredManagerInitializer()
-            self._intelligence_initializer.start()
+        try:
+            from intelligence.core import EncryptIntelligenceManager, EncryptIntelligenceConfig
+            tier = self.data.get("encrypt_intelligence_model_tier", "EncryptIntelligence Light")
+            config = EncryptIntelligenceConfig(model_tier=tier)
+            self.intelligence_manager = EncryptIntelligenceManager(config)
+        except Exception as e:
+            print(f"[INTELLIGENCE] Init-Fehler: {e}")
 
     def _reset_intelligence_init(self):
-        """Verwerfe Manager und laufende Hintergrund-Initialisierung."""
         self.intelligence_manager = None
-        self._intelligence_initializer = None
 
     def _get_intelligence_manager(self, block=True):
-        """Hole den Manager über die Hintergrund-Initialisierung.
-
-        block=True wartet, bis der Manager bereit ist (z. B. beim Öffnen des
-        Dialogs); block=False liefert None, solange das Laden läuft (z. B. für
-        die Sucheinbindung), damit die UI nicht blockiert.
-        """
-        if self.intelligence_manager is not None:
-            return self.intelligence_manager
-
-        self._start_intelligence_init()
-        initializer = self._intelligence_initializer
-
-        if not block and not initializer.is_ready():
-            return None
-
-        self.intelligence_manager = initializer.get_manager()
+        if self.intelligence_manager is None:
+            self._start_intelligence_init()
         return self.intelligence_manager
 
     def show_intelligence_dialog(self):
-        try:
-            manager = self._get_intelligence_manager()
-        except Exception as e:
+        manager = self._get_intelligence_manager()
+        if manager is None:
             QMessageBox.critical(
                 self,
                 "EncryptIntelligence",
-                f"EncryptIntelligence konnte nicht geladen werden: {e}",
+                "EncryptIntelligence konnte nicht geladen werden.",
             )
             return
 
         if not hasattr(self, "_intelligence_dialog") or self._intelligence_dialog is None:
             from intelligence.ui import EncryptIntelligenceDialog
             self._intelligence_dialog = EncryptIntelligenceDialog(
-                self,
-                manager=manager,
+                self, manager=manager,
             )
         else:
             self._intelligence_dialog.manager = manager
