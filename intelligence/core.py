@@ -1,15 +1,13 @@
 """EncryptIntelligence: Leichtgewichtiges Indexierungs- und Suchsystem."""
 
+import locale
 import hashlib
 import json
 import math
 import os
 import platform
 import re
-import shutil
 import socket
-import subprocess
-import tempfile
 import threading
 import time
 import uuid
@@ -41,17 +39,25 @@ except Exception:
     docx = None
 
 try:
+    import pypdf
+except Exception:
+    pypdf = None
+
+try:
     from PIL import Image
 except Exception:
     Image = None
 
 try:
-    import pytesseract
-    configured_tesseract = shutil.which("tesseract")
-    if configured_tesseract:
-        pytesseract.pytesseract.tesseract_cmd = configured_tesseract
+    import easyocr
+    _easyocr_reader = None
 except Exception:
-    pytesseract = None
+    easyocr = None
+
+# easyocr verwendet Unicode-Zeichen für Fortschrittsbalken,
+# die auf Windows mit cp1252 zu Fehlern führen – daher UTF-8 erzwingen.
+if os.name == "nt" and locale.getencoding() != "utf-8":
+    os.environ["PYTHONIOENCODING"] = "utf-8"
 
 
 # ============================================================================
@@ -73,8 +79,8 @@ _MODEL_REGISTRY = {
         "ram_gb": 3,
         "description": "1,5 Mrd. Parameter, ~900 MB Download, sehr schnell, ideal für schwache Systeme",
         "system_prompt": (
-            "Du bist EncryptIntelligence Light, ein hilfsbereiter Assistent "
-            "für verschlüsselte Dokumente. Antworte kurz und präzise."
+            "Extrahiere die Antwort aus den untenstehenden Dokumenten. "
+            "Nenne nur die Fakten. Keine Erklärungen."
         ),
     },
     TIER_BASE: {
@@ -85,9 +91,12 @@ _MODEL_REGISTRY = {
         "ram_gb": 8,
         "description": "7 Mrd. Parameter, ~3,9 GB Download, gute Qualität, empfohlen für die meisten Systeme",
         "system_prompt": (
-            "Du bist EncryptIntelligence Base, ein hilfsbereiter Assistent "
-            "für verschlüsselte Dokumente. Beantworte Fragen auf Basis der "
-            "indizierten Dokumente. Antworte natürlich und prägnant auf Deutsch."
+            "Du bist EncryptIntelligence Base. Deine Wissensbasis sind die "
+            "unten als 'Relevante Dokumente' aufgelisteten Inhalte. Diese "
+            "wurden von einer Suchmaschine aus dem verschlüsselten Tresor "
+            "des Benutzers abgerufen. Antworte AUSSCHLIESSLICH auf Basis "
+            "dieser Dokumente. Wenn die Dokumente keine Antwort enthalten, "
+            "sage es klar. Antworte natürlich und prägnant auf Deutsch."
         ),
     },
     TIER_PRO: {
@@ -95,13 +104,16 @@ _MODEL_REGISTRY = {
         "url": "https://gpt4all.io/models/gguf/Meta-Llama-3-8B-Instruct.Q4_0.gguf",
         "filesize": 4661724384,
         "md5": "c87ad09e1e4c8f9c35a5fcef52b6f1c9",
-        "ram_gb": 8,
-        "description": "8 Mrd. Parameter, ~4,3 GB Download, höchste Qualität, beste Antworten",
+        "ram_gb": 16,
+        "description": "8 Mrd. Parameter, ~4,3 GB Download, höchste Qualität, erfordert starke Hardware",
         "system_prompt": (
-            "Du bist EncryptIntelligence Pro, ein hochqualifizierter Assistent "
-            "für verschlüsselte Dokumente. Analysiere die bereitgestellten "
-            "Dokumente gründlich und gib detaillierte, fundierte Antworten "
-            "auf Deutsch. Beziehe dich auf konkrete Textstellen."
+            "Du bist EncryptIntelligence Pro. Deine Wissensbasis sind die "
+            "unten als 'Relevante Dokumente' aufgelisteten Inhalte. Diese "
+            "wurden von einer Suchmaschine aus dem verschlüsselten Tresor "
+            "des Benutzers abgerufen. Antworte AUSSCHLIESSLICH auf Basis "
+            "dieser Dokumente. Wenn die Dokumente keine Antwort enthalten, "
+            "sage es klar. Analysiere gründlich und beziehe dich auf "
+            "konkrete Textstellen. Antworte auf Deutsch."
         ),
     },
 }
@@ -214,11 +226,28 @@ def _make_snippet(text: str, query: str, max_length: int = 250) -> str:
     return snippet.strip()
 
 
-def _tesseract_available() -> bool:
-    if pytesseract is None:
-        return False
-    cmd = getattr(pytesseract.pytesseract, "tesseract_cmd", "")
-    return bool(cmd and shutil.which(cmd))
+def _ocr_available() -> bool:
+    return easyocr is not None
+
+
+def _ocr_image(img) -> str:
+    global _easyocr_reader
+    if easyocr is None:
+        return ""
+    try:
+        if _easyocr_reader is None:
+            try:
+                import torch
+                gpu = torch.cuda.is_available()
+            except Exception:
+                gpu = False
+            _easyocr_reader = easyocr.Reader(["de", "en"], gpu=gpu)
+        arr = img.convert("RGB")
+        import numpy as np
+        result = _easyocr_reader.readtext(np.array(arr), detail=0, paragraph=True)
+        return "\n".join(result)
+    except Exception:
+        return ""
 
 
 # ============================================================================
@@ -330,54 +359,42 @@ class DocumentExtractor:
             return raw.decode("latin-1", errors="ignore")
 
     def _from_pdf(self, raw: bytes) -> str:
-        if fitz is None:
-            pdftotext = shutil.which("pdftotext")
-            if not pdftotext:
-                self.last_error = "PDF-Parser fehlt (PyMuPDF oder pdftotext)"
-                return ""
-            return self._via_pdftotext(raw, pdftotext)
-        try:
-            parts = []
-            doc = fitz.open(stream=raw, filetype="pdf")
-            for page in doc:
-                text = page.get_text() or ""
-                parts.append(text)
-                if not text and _tesseract_available() and Image is not None:
-                    for img in page.get_images(full=True):
-                        try:
-                            xref = img[0]
-                            pix = fitz.Pixmap(doc, xref)
-                            mode = "RGB" if pix.n < 5 else "RGBA"
-                            image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
-                            parts.append(pytesseract.image_to_string(image))
-                        except Exception:
-                            pass
-            return "\n".join(parts)
-        except Exception as e:
-            self.last_error = str(e)
-            return ""
+        if fitz is not None:
+            try:
+                parts = []
+                doc = fitz.open(stream=raw, filetype="pdf")
+                for page in doc:
+                    text = page.get_text() or ""
+                    parts.append(text)
+                    if not text and _ocr_available() and Image is not None:
+                        for img in page.get_images(full=True):
+                            try:
+                                xref = img[0]
+                                pix = fitz.Pixmap(doc, xref)
+                                mode = "RGB" if pix.n < 5 else "RGBA"
+                                image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
+                                parts.append(_ocr_image(image))
+                            except Exception:
+                                pass
+                return "\n".join(parts)
+            except Exception as e:
+                self.last_error = str(e)
 
-    def _via_pdftotext(self, raw: bytes, exe: str) -> str:
-        tmp = None
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
-                f.write(raw)
-                tmp = f.name
-            result = subprocess.run([exe, "-layout", tmp, "-"],
-                                    capture_output=True, timeout=30, check=False)
-            if result.returncode == 0:
-                return result.stdout.decode("utf-8", errors="ignore")
-            self.last_error = result.stderr.decode("utf-8", errors="ignore").strip()
-            return ""
-        except Exception as e:
-            self.last_error = str(e)
-            return ""
-        finally:
-            if tmp:
-                try:
-                    os.remove(tmp)
-                except Exception:
-                    pass
+        if pypdf is not None:
+            try:
+                from io import BytesIO
+                reader = pypdf.PdfReader(BytesIO(raw))
+                parts = []
+                for page in reader.pages:
+                    text = page.extract_text() or ""
+                    parts.append(text)
+                return "\n".join(parts)
+            except Exception as e:
+                self.last_error = str(e)
+                return ""
+
+        self.last_error = "PDF-Parser fehlt (PyMuPDF oder pypdf)"
+        return ""
 
     def _from_docx(self, raw: bytes) -> str:
         if docx is not None:
@@ -409,13 +426,13 @@ class DocumentExtractor:
         if Image is None:
             self.last_error = "Pillow nicht installiert"
             return ""
-        if not _tesseract_available():
-            self.last_error = "Tesseract nicht gefunden"
+        if not _ocr_available():
+            self.last_error = "easyocr nicht installiert"
             return ""
         try:
             from io import BytesIO
             img = Image.open(BytesIO(raw))
-            return pytesseract.image_to_string(img)
+            return _ocr_image(img)
         except Exception as e:
             self.last_error = str(e)
             return ""
@@ -426,12 +443,15 @@ class DocumentExtractor:
 # ============================================================================
 
 class LocalLLMClient:
-    """Wrapper für gpt4all."""
+    """Wrapper für gpt4all mit asynchronem Laden."""
 
     def __init__(self, model_path: str, context_length: int = 8192):
         self._available = False
         self.llm = None
         self._load_error = ""
+        self._loading = False
+        self._gpt4all_class = None
+        self._context_length = context_length
         self.model_path = Path(model_path) if model_path else Path()
 
         if not model_path or not self.model_path.exists():
@@ -440,11 +460,28 @@ class LocalLLMClient:
 
         try:
             from gpt4all import GPT4All
+            self._gpt4all_class = GPT4All
         except ImportError:
             self._load_error = "gpt4all nicht installiert"
-            return
 
-        self._load_model(GPT4All, context_length)
+    def load(self) -> None:
+        """Lädt das Modell synchron (blockierend)."""
+        if self._available or self._gpt4all_class is None:
+            return
+        self._loading = True
+        self._load_model(self._gpt4all_class, self._context_length)
+        self._loading = False
+
+    def load_async(self, callback: Optional[Callable[[bool], None]] = None) -> None:
+        """Lädt das Modell im Hintergrund-Thread."""
+        def _run():
+            self.load()
+            if callback:
+                callback(self._available)
+        threading.Thread(target=_run, daemon=True).start()
+
+    def is_loading(self) -> bool:
+        return self._loading
 
     def _load_model(self, GPT4All, context_length: int) -> None:
         """Erzeugt GPT4All-Instanz und prüft, ob das Modell wirklich geladen wurde."""
@@ -496,60 +533,29 @@ class LocalLLMClient:
     def generate(
         self,
         prompt: str,
-        context: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        system_prompt: str = "",
+        temperature: float = 0.01,
+        max_tokens: int = 40,
+        repeat_penalty: float = 1.2,
         on_token: Optional[Callable[[str], None]] = None,
     ) -> str:
         if not self._available or self.llm is None:
             return ""
         try:
-            with self.llm.chat_session():
-                response = self.llm.generate(
+            collected: list = []
+            with self.llm.chat_session(system_prompt=system_prompt or None):
+                for tok in self.llm.generate(
                     prompt, max_tokens=max_tokens, temp=temperature,
-                )
-            text = response.strip()
-            if on_token:
-                on_token(text)
-            return text
+                    repeat_penalty=repeat_penalty, streaming=True,
+                ):
+                    if tok.strip() in ("<|im_end|>", "</s>", "<|eot_id|>", "<|endoftext|>"):
+                        break
+                    collected.append(tok)
+                    if on_token:
+                        on_token(tok)
+            return "".join(collected).strip()
         except Exception as exc:
             return f"[LLM Fehler: {exc}]"
-
-
-# ============================================================================
-# Intelligente Reminder-Extraktion
-# ============================================================================
-
-class ReminderExtractor:
-    CANCELLATION = [r"\bkündig\w*\b", r"\bfrist\w*\b", r"\bwechsel\w+\b", r"\bauskünft\w*\b"]
-    CONTRACT = [r"\bvertrag\w*\b", r"\bversicher\w+\b", r"\bpolice\b", r"\btarif\w*\b"]
-    WARRANTY = [r"\bgarant\w+\b", r"\bgewährleist\w+\b"]
-    DEADLINE = [r"\bfällig\b", r"\btermin\w*\b", r"\bstichtag\b", r"\bdeadline\b"]
-    DATE = r"(\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4})"
-
-    @classmethod
-    def extract(cls, text: str, source: str) -> List[dict]:
-        reminders = []
-        lowered = text.lower()
-        dates = re.findall(cls.DATE, text)
-        if any(re.search(p, lowered) for p in cls.CANCELLATION):
-            reminders.append({"type": "cancellation", "title": f"Kündigung: {source}",
-                              "date": dates[0] if dates else None, "source": source,
-                              "created": datetime.now().isoformat()})
-        if any(re.search(p, lowered) for p in cls.CONTRACT):
-            reminders.append({"type": "contract", "title": f"Vertrag: {source}",
-                              "date": dates[0] if dates else None, "source": source,
-                              "created": datetime.now().isoformat()})
-        if any(re.search(p, lowered) for p in cls.WARRANTY):
-            reminders.append({"type": "warranty", "title": f"Garantie: {source}",
-                              "date": dates[0] if dates else None, "source": source,
-                              "created": datetime.now().isoformat()})
-        if any(re.search(p, lowered) for p in cls.DEADLINE):
-            if not any(r.get("type") in ("cancellation", "contract", "warranty") for r in reminders):
-                reminders.append({"type": "deadline", "title": f"Termin: {source}",
-                                  "date": dates[0] if dates else None, "source": source,
-                                  "created": datetime.now().isoformat()})
-        return reminders
 
 
 # ============================================================================
@@ -593,7 +599,6 @@ class EncryptIntelligenceManager:
 
         self._storage: dict = {
             "documents": {},
-            "reminders": [],
             "metadata": {
                 "version": 3,
                 "created": datetime.now().isoformat(),
@@ -611,8 +616,9 @@ class EncryptIntelligenceManager:
         # System-Prompt je nach Tier
         self._system_prompt = get_system_prompt(self.config.model_tier)
 
-        # LLM
+        # LLM (lädt im Hintergrund – GUI bleibt flüssig)
         self.llm = LocalLLMClient(self.config.llm_model_path)
+        self.llm.load_async()
 
         # Document Extractor
         self._extractor = DocumentExtractor()
@@ -670,7 +676,6 @@ class EncryptIntelligenceManager:
         if not self.index_path.exists():
             self._storage = {
                 "documents": {},
-                "reminders": [],
                 "metadata": {"version": 3, "created": datetime.now().isoformat(),
                              "updated": datetime.now().isoformat(), "document_count": 0}
             }
@@ -684,7 +689,6 @@ class EncryptIntelligenceManager:
         except Exception:
             if self._legacy_storage_key is None:
                 self._storage["documents"] = {}
-                self._storage["reminders"] = []
                 return
             try:
                 payload = self._decrypt_blob(raw, self._legacy_storage_key)
@@ -693,7 +697,6 @@ class EncryptIntelligenceManager:
                 self._remove_legacy_storage_key()
             except Exception:
                 self._storage["documents"] = {}
-                self._storage["reminders"] = []
         # TextIndex aus gespeicherten Dokumenten aufbauen
         self._rebuild_text_index()
 
@@ -735,23 +738,9 @@ class EncryptIntelligenceManager:
                 "display_name": name,
                 "indexed_at": datetime.now().isoformat(),
             }
-            # TextIndex aktualisieren
             self._text_index.add(doc_id, normalized, metadata)
-            # Reminder extrahieren
-            new_reminders = ReminderExtractor.extract(normalized, doc_id)
-            self._update_reminders(new_reminders)
             self._storage["metadata"]["document_count"] = len(self._storage["documents"])
             self._save_storage()
-
-    def _update_reminders(self, new: List[dict]) -> None:
-        existing = self._storage.get("reminders", [])
-        for r in new:
-            if not any(
-                r.get("title") == s.get("title") and r.get("source") == s.get("source")
-                for s in existing
-            ):
-                existing.append(r)
-        self._storage["reminders"] = existing
 
     def fetch_document(self, doc_id: str) -> Optional[dict]:
         return self._storage["documents"].get(doc_id)
@@ -783,18 +772,12 @@ class EncryptIntelligenceManager:
             })
         return out
 
-    # --- Reminder ---
-
-    def get_reminders(self) -> List[dict]:
-        return self._storage.get("reminders", [])
-
     # --- Statistiken ---
 
     def get_statistics(self) -> dict:
         docs = self._storage.get("documents", {})
         return {
             "documents_indexed": len(docs),
-            "reminders_found": len(self._storage.get("reminders", [])),
             "total_text_size": sum(len(d.get("text", "")) for d in docs.values()),
             "storage_location": str(self.config.storage_dir),
             "metadata": self._storage.get("metadata", {}),
@@ -803,11 +786,10 @@ class EncryptIntelligenceManager:
     # --- Capability Status ---
 
     def capability_status(self) -> dict:
-        pdftotext = shutil.which("pdftotext") is not None
         return {
-            "pdf": fitz is not None or pdftotext,
+            "pdf": fitz is not None or pypdf is not None,
             "docx": True,
-            "ocr": Image is not None and _tesseract_available(),
+            "ocr": Image is not None and _ocr_available(),
             "llm": self.llm.is_available(),
             "llm_backend": self.llm.backend_name(),
             "llm_model": str(self.llm.model_path),
@@ -840,18 +822,19 @@ class EncryptIntelligenceManager:
         self, question: str, candidates: List[dict],
         on_token: Optional[Callable[[str], None]] = None,
     ) -> str:
-        if not candidates:
-            return "Keine relevanten Dokumente gefunden."
+        good = [c for c in candidates if c.get("score", 0) > 0.6]
+        if not good:
+            return self._answer_fallback(candidates)
         parts = []
-        for i, doc in enumerate(candidates[:3], 1):
-            parts.append(f"- {doc['document_name']}: {doc['text'][:1000]}")
+        for doc in good[:2]:
+            snippet = (doc.get("snippet") or doc.get("text", ""))[:300]
+            parts.append(f"- {doc['document_name']}: {snippet}")
         context = "\n".join(parts)
-        prompt = (
-            f"{self._system_prompt}\n\n"
-            f"Relevante Dokumente:\n{context}\n\n"
-            f"Frage des Benutzers:\n{question}"
+        prompt = f"Relevante Dokumente:\n{context}\n\nFrage: {question}"
+        answer = self.llm.generate(
+            prompt, system_prompt=self._system_prompt,
+            on_token=on_token,
         )
-        answer = self.llm.generate(prompt, temperature=0.7, on_token=on_token)
         if not answer or answer.startswith("[LLM Fehler"):
             return self._answer_fallback(candidates)
         return answer

@@ -1,10 +1,9 @@
 """EncryptIntelligence UI v3: Chat-Interface mit Keyword-Suche."""
 
-import re
 from typing import Optional
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QTextCursor
 from PyQt6.QtWidgets import (
     QDialog, QHBoxLayout, QVBoxLayout, QWidget, QTextEdit, QPushButton,
@@ -15,27 +14,26 @@ from PyQt6.QtWidgets import (
 
 class QuestionWorker(QThread):
     response_token = pyqtSignal(str)
-    response_done = pyqtSignal(str)
+    response_done = pyqtSignal()
     error_occurred = pyqtSignal(str)
 
     def __init__(self, manager, question: str):
         super().__init__()
         self.manager = manager
         self.question = question
-        self._buffer = ""
+        self._streamed = False
 
     def _on_token(self, token: str) -> None:
-        self._buffer += token
-        if re.search(r'[.!?]\s*$', self._buffer):
-            self.response_token.emit(self._buffer)
-            self._buffer = ""
+        self._streamed = True
+        self.response_token.emit(token)
 
     def run(self) -> None:
         try:
             answer = self.manager.answer_question(self.question, self._on_token)
-            if self._buffer:
-                self.response_token.emit(self._buffer)
-            self.response_done.emit(answer)
+            if not self._streamed:
+                if answer:
+                    self.response_token.emit(answer)
+            self.response_done.emit()
         except Exception as exc:
             self.error_occurred.emit(str(exc))
 
@@ -83,9 +81,16 @@ class EncryptIntelligenceDialog(QDialog):
         self.manager = manager
         self._question_worker: Optional[QuestionWorker] = None
         self._index_worker: Optional[IndexWorker] = None
+        self._index_silent = False
         self._build_ui()
         self._refresh_sidebar()
         self._update_status()
+
+        self._loading_timer = QTimer(self)
+        self._loading_timer.timeout.connect(self._on_loading_check)
+        self._loading_timer.start(1500)
+
+        QTimer.singleShot(100, self._auto_index_if_needed)
 
     def _build_ui(self) -> None:
         root = QHBoxLayout(self)
@@ -118,7 +123,7 @@ class EncryptIntelligenceDialog(QDialog):
         self.chat_display = QTextEdit()
         self.chat_display.setObjectName("eiChatDisplay")
         self.chat_display.setReadOnly(True)
-        self.chat_display.setPlaceholderText("Stelle eine Frage zu deinen indizierten Dokumenten...")
+        self.chat_display.setPlaceholderText("Stelle eine Frage zu deinen Dokumenten...")
         layout.addWidget(self.chat_display, 1)
 
         input_area = QVBoxLayout()
@@ -167,9 +172,6 @@ class EncryptIntelligenceDialog(QDialog):
         self.docs_status = QLabel("0 Dokumente")
         self.docs_status.setObjectName("eiStatusText")
         layout.addWidget(self.docs_status)
-        self.reminder_status = QLabel("0 Erinnerungen")
-        self.reminder_status.setObjectName("eiStatusText")
-        layout.addWidget(self.reminder_status)
 
         self.index_button = QPushButton("Tresor indexieren")
         self.index_button.setObjectName("eiIndexButton")
@@ -197,10 +199,6 @@ class EncryptIntelligenceDialog(QDialog):
         search_layout.addWidget(self.search_results)
         tabs.addTab(search_tab, "🔍 Suche")
 
-        self.reminders_list = QListWidget()
-        self.reminders_list.setObjectName("eiReminderList")
-        tabs.addTab(self.reminders_list, "⏰ Erinnerungen")
-
         layout.addWidget(tabs, 1)
 
         layout.addWidget(self._sidebar_label("Statistiken"))
@@ -226,31 +224,64 @@ class EncryptIntelligenceDialog(QDialog):
             QTextEdit.keyPressEvent(self.chat_input, event)
 
     def _update_status(self) -> None:
+        tier = self.manager.config.model_tier.replace("EncryptIntelligence ", "")
         if self.manager.llm.is_available():
-            model = self.manager.llm.model_path.stem
-            self.llm_status.setText(f"✓ LLM ({model})")
+            self.llm_status.setText(f"✓ EncryptIntelligence ({tier})")
             self.llm_status.setStyleSheet("color: #10b981;")
+        elif self.manager.llm.is_loading():
+            self.llm_status.setText(f"⏳ EncryptIntelligence ({tier}) lädt...")
+            self.llm_status.setStyleSheet("color: #facc15;")
         else:
             error = (self.manager.llm.load_error() or "offline")[:30]
-            self.llm_status.setText(f"⚠ LLM ({error}...)")
+            self.llm_status.setText(f"⚠ EncryptIntelligence ({tier}: {error})")
             self.llm_status.setStyleSheet("color: #facc15;")
 
         docs = len(self.manager.list_documents())
-        reminders = len(self.manager.get_reminders())
         self.docs_status.setText(f"{docs} Dokumente")
-        self.reminder_status.setText(f"{reminders} Erinnerungen")
 
         stats = self.manager.get_statistics()
         self.stats_label.setText(
-            f"Gesamt: {stats['documents_indexed']} Docs\n"
+            f"Indexiert: {stats['documents_indexed']} Docs\n"
             f"Größe: {stats['total_text_size'] // 1024}KB"
         )
+
+    def _on_loading_check(self) -> None:
+        tier = self.manager.config.model_tier.replace("EncryptIntelligence ", "")
+        if self.manager.llm.is_loading():
+            self.llm_status.setText(f"⏳ EncryptIntelligence ({tier}) lädt...")
+            self.llm_status.setStyleSheet("color: #facc15;")
+        elif self.manager.llm.is_available():
+            self.llm_status.setText(f"✓ EncryptIntelligence ({tier})") 
+            self.llm_status.setStyleSheet("color: #10b981;")
+            self._loading_timer.stop()
+        elif self.manager.llm.load_error():
+            error = self.manager.llm.load_error()[:30]
+            self.llm_status.setText(f"⚠ EncryptIntelligence ({tier}: {error})")
+            self.llm_status.setStyleSheet("color: #facc15;")
+            self._loading_timer.stop()
+        else:
+            self.llm_status.setText(f"⏳ EncryptIntelligence ({tier}) lädt...") 
+            self.llm_status.setStyleSheet("color: #facc15;")
+
+    def _auto_index_if_needed(self) -> None:
+        if self.manager.list_documents():
+            return
+        parent = self.parent()
+        if parent is None:
+            return
+        container_path = getattr(parent, "container_path", None)
+        master_key = getattr(parent, "master_key", None)
+        meta = getattr(parent, "meta", None)
+        if not all([container_path, master_key, meta]):
+            return
+        self._start_indexing(container_path, meta, master_key, silent=True)
 
     def _on_send_question(self) -> None:
         question = self.chat_input.toPlainText().strip()
         if not question:
             return
         self.chat_display.append(f"<b style='color:#3f8cff'>Du:</b> {question}\n")
+        self.chat_display.append("<b style='color:#2f7cf6'>EncryptIntelligence:</b>\n")
         self.chat_input.clear()
         self.send_button.setEnabled(False)
         self.status_bar.setVisible(True)
@@ -267,8 +298,8 @@ class EncryptIntelligenceDialog(QDialog):
         self.chat_display.setTextCursor(cursor)
         self.chat_display.insertPlainText(token)
 
-    def _on_response_done(self, answer: str) -> None:
-        self.chat_display.append(f"\n<b style='color:#2f7cf6'>EncryptIntelligence:</b>\n{answer}\n")
+    def _on_response_done(self) -> None:
+        self.chat_display.append("")
         self.send_button.setEnabled(True)
         self.status_bar.setVisible(False)
         self._refresh_sidebar()
@@ -310,6 +341,16 @@ class EncryptIntelligenceDialog(QDialog):
         snippet = doc["text"][:300] + ("..." if len(doc["text"]) > 300 else "")
         self.chat_display.append(f"📄 <b>{doc['display_name']}</b>\n\n{snippet}\n")
 
+    def _start_indexing(self, container_path: str, meta: dict, master_key: bytes, silent: bool = False) -> None:
+        self._index_silent = silent
+        self.index_button.setEnabled(False)
+        self.status_bar.setVisible(True)
+        self.status_bar.setRange(0, 0)
+        self._index_worker = IndexWorker(self.manager, container_path, meta, master_key)
+        self._index_worker.finished.connect(self._on_index_finished)
+        self._index_worker.error_occurred.connect(self._on_index_error)
+        self._index_worker.start()
+
     def _on_index_current_container(self) -> None:
         parent = self.parent()
         if parent is None:
@@ -321,18 +362,14 @@ class EncryptIntelligenceDialog(QDialog):
         if not all([container_path, master_key, meta]):
             QMessageBox.warning(self, "Fehler", "Bitte öffne zuerst einen Tresor.")
             return
-        self.index_button.setEnabled(False)
-        self.status_bar.setVisible(True)
-        self.status_bar.setRange(0, 0)
-        self._index_worker = IndexWorker(self.manager, container_path, meta, master_key)
-        self._index_worker.finished.connect(self._on_index_finished)
-        self._index_worker.error_occurred.connect(self._on_index_error)
-        self._index_worker.start()
+        self._start_indexing(container_path, meta, master_key)
 
     def _on_index_finished(self, indexed: list, skipped: list) -> None:
         self.index_button.setEnabled(True)
         self.status_bar.setVisible(False)
         self._refresh_sidebar()
+        if self._index_silent:
+            return
         detail = ""
         if skipped:
             detail = f"\n\nÜbersprungen ({len(skipped)}):"
@@ -352,7 +389,6 @@ class EncryptIntelligenceDialog(QDialog):
 
     def _refresh_sidebar(self) -> None:
         self._refresh_documents()
-        self._refresh_reminders()
         self._update_status()
 
     def _refresh_documents(self) -> None:
@@ -365,21 +401,6 @@ class EncryptIntelligenceDialog(QDialog):
         else:
             for doc in docs:
                 self.documents_list.addItem(QListWidgetItem(doc))
-
-    def _refresh_reminders(self) -> None:
-        self.reminders_list.clear()
-        reminders = self.manager.get_reminders()
-        if not reminders:
-            item = QListWidgetItem("Keine Erinnerungen")
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            self.reminders_list.addItem(item)
-        else:
-            for r in reminders:
-                title = r.get("title", "Unbekannt")
-                date = r.get("date", "-")
-                item = QListWidgetItem(f"{title}\n📅 {date}")
-                item.setData(Qt.ItemDataRole.UserRole, r)
-                self.reminders_list.addItem(item)
 
     def _stylesheet(self) -> str:
         return """

@@ -2229,7 +2229,21 @@ class App(QWidget):
         return self.intelligence_manager
 
     def show_intelligence_dialog(self):
-        manager = self._get_intelligence_manager()
+        container_path = getattr(self, "container_path", None)
+        if container_path:
+            from intelligence.core import EncryptIntelligenceManager, EncryptIntelligenceConfig
+            tier = self.data.get("encrypt_intelligence_model_tier", "EncryptIntelligence Light")
+            vault_dir = Path(container_path).parent / (Path(container_path).stem + ".ei")
+            try:
+                vault_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            manager = EncryptIntelligenceManager(
+                EncryptIntelligenceConfig(model_tier=tier, storage_dir=str(vault_dir))
+            )
+        else:
+            manager = self._get_intelligence_manager()
+
         if manager is None:
             QMessageBox.critical(
                 self,

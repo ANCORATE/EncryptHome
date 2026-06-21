@@ -470,8 +470,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(title)
 
         description = QLabel(
-            "Lokale KI hilft dir, verschlüsselte Dokumente schnell zu durchsuchen. "
-            "Gib einfach Stichworte ein und erhalte sofort passende Ergebnisse."
+            "EncryptIntelligence hilft dir, verschlüsselte Dokumente schnell zu durchsuchen."
         )
 
         description.setWordWrap(True)
@@ -617,7 +616,7 @@ class SettingsDialog(QDialog):
         layout.addSpacing(8)
 
         hint = QLabel(
-            "Hinweis: Die Suche verwendet nur bereits indizierte Dokumente aus lokalen Tresoren."
+            "Hinweis: Die Suche verwendet verschlüsselte Dokumente aus deinem aktuellen Tresor."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #c0c0c0; font-size: 12px;")
@@ -720,9 +719,9 @@ class SettingsDialog(QDialog):
         )
         self._status_labels["search"].setText("✅ immer verfügbar")
         self._status_labels["search"].setStyleSheet("color: #4caf50;")
-        self._status_labels["pdf"].setText("✅ ja" if caps["pdf"] else "❌ nein (pdftotext fehlt)")
+        self._status_labels["pdf"].setText("✅ ja" if caps["pdf"] else "❌ nein (PyMuPDF/pypdf fehlt)")
         self._status_labels["pdf"].setStyleSheet("color: #4caf50;" if caps["pdf"] else "color: #ff4444;")
-        self._status_labels["ocr"].setText("✅ ja" if caps["ocr"] else "❌ nein (Tesseract fehlt)")
+        self._status_labels["ocr"].setText("✅ ja" if caps["ocr"] else "❌ nein (easyocr fehlt)")
         self._status_labels["ocr"].setStyleSheet("color: #4caf50;" if caps["ocr"] else "color: #ff9800;")
 
     def create_updates_tab(self):
