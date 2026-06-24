@@ -231,17 +231,21 @@ def _ocr_available() -> bool:
 
 
 def _ocr_image(img) -> str:
+    """Extrahiert Text aus einem Bild mittels easyocr (Lazy Loading)."""
     global _easyocr_reader
     if easyocr is None:
         return ""
     try:
         if _easyocr_reader is None:
+            # Lazy Loading des Readers erst beim ersten OCR-Aufruf
             try:
                 import torch
                 gpu = torch.cuda.is_available()
             except Exception:
                 gpu = False
+            # Initialisierung kann mehrere Sekunden dauern
             _easyocr_reader = easyocr.Reader(["de", "en"], gpu=gpu)
+        
         arr = img.convert("RGB")
         import numpy as np
         result = _easyocr_reader.readtext(np.array(arr), detail=0, paragraph=True)
@@ -255,28 +259,53 @@ def _ocr_image(img) -> str:
 # ============================================================================
 
 class TextIndex:
-    """In-Memory Volltextindex mit TF-IDF-ähnlichem Ranking."""
+    """In-Memory Volltextindex mit TF-IDF-Ranking und invertiertem Index."""
 
     def __init__(self):
         self._docs: Dict[str, dict] = {}
         self._idf: Dict[str, float] = {}
+        self._inverted_index: Dict[str, List[str]] = {}
+        self._batch_mode = False
+
+    def set_batch_mode(self, enabled: bool) -> None:
+        """Aktiviert/Deaktiviert den Batch-Modus. Bei Deaktivierung wird der IDF-Index neu aufgebaut."""
+        self._batch_mode = enabled
+        if not enabled:
+            self._rebuild_idf()
 
     def add(self, doc_id: str, text: str, metadata: dict) -> None:
         tokens = _tokenize(text)
+        term_counts = Counter(tokens)
         self._docs[doc_id] = {
             "text": text,
-            "term_counts": Counter(tokens),
+            "term_counts": term_counts,
             "metadata": metadata,
         }
-        self._rebuild_idf()
+        # Invertierten Index aktualisieren
+        for term in term_counts:
+            if term not in self._inverted_index:
+                self._inverted_index[term] = []
+            self._inverted_index[term].append(doc_id)
+            
+        if not self._batch_mode:
+            self._rebuild_idf()
 
     def remove(self, doc_id: str) -> None:
-        self._docs.pop(doc_id, None)
-        self._rebuild_idf()
+        if doc_id in self._docs:
+            doc = self._docs.pop(doc_id)
+            # Aus invertiertem Index entfernen
+            for term in doc["term_counts"]:
+                if term in self._inverted_index:
+                    self._inverted_index[term].remove(doc_id)
+                    if not self._inverted_index[term]:
+                        del self._inverted_index[term]
+            if not self._batch_mode:
+                self._rebuild_idf()
 
     def clear(self) -> None:
         self._docs.clear()
         self._idf.clear()
+        self._inverted_index.clear()
 
     def doc_count(self) -> int:
         return len(self._docs)
@@ -286,13 +315,9 @@ class TextIndex:
         if n == 0:
             self._idf.clear()
             return
-        term_doc_count: Counter = Counter()
-        for doc in self._docs.values():
-            for term in doc["term_counts"]:
-                term_doc_count[term] += 1
         self._idf = {
-            term: math.log(1 + (n - df + 0.5) / (df + 0.5))
-            for term, df in term_doc_count.items()
+            term: math.log(1 + (n - len(doc_ids) + 0.5) / (len(doc_ids) + 0.5))
+            for term, doc_ids in self._inverted_index.items()
         }
 
     def _tfidf(self, term: str, count: int) -> float:
@@ -306,9 +331,20 @@ class TextIndex:
         query_terms = _tokenize(query)
         if not query_terms or not self._docs:
             return []
+        
         query_counts = Counter(query_terms)
+        # Nur Dokumente betrachten, die mindestens einen Query-Term enthalten (Invertierter Index)
+        candidate_ids = set()
+        for term in query_counts:
+            if term in self._inverted_index:
+                candidate_ids.update(self._inverted_index[term])
+        
+        if not candidate_ids:
+            return []
+
         scores: List[Tuple[str, float]] = []
-        for doc_id, doc in self._docs.items():
+        for doc_id in candidate_ids:
+            doc = self._docs[doc_id]
             dot = 0.0
             q_norm = 0.0
             d_norm = 0.0
@@ -324,6 +360,7 @@ class TextIndex:
             score = dot / (math.sqrt(q_norm) * math.sqrt(d_norm))
             if score > 0:
                 scores.append((doc_id, score))
+        
         scores.sort(key=lambda x: -x[1])
         return scores[:top_k]
 
@@ -724,6 +761,17 @@ class EncryptIntelligenceManager:
     def _make_document_id(self, name: str, source: str) -> str:
         return f"{source}::{name}"
 
+    def batch_index_start(self) -> None:
+        """Startet den Batch-Modus für effiziente Massenindexierung."""
+        with self._index_lock:
+            self._text_index.set_batch_mode(True)
+
+    def batch_index_end(self) -> None:
+        """Beendet den Batch-Modus und baut den Index final auf."""
+        with self._index_lock:
+            self._text_index.set_batch_mode(False)
+            self._save_storage()
+
     def index_text(self, name: str, text: str, metadata: dict) -> None:
         normalized = _normalize_text(text)
         source = metadata.get("source", "unbekannt")
@@ -740,7 +788,8 @@ class EncryptIntelligenceManager:
             }
             self._text_index.add(doc_id, normalized, metadata)
             self._storage["metadata"]["document_count"] = len(self._storage["documents"])
-            self._save_storage()
+            if not self._text_index._batch_mode:
+                self._save_storage()
 
     def fetch_document(self, doc_id: str) -> Optional[dict]:
         return self._storage["documents"].get(doc_id)
