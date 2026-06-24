@@ -667,13 +667,32 @@ class EncryptIntelligenceManager:
 
     def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
+            # Haupttabelle für Dokumente
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS documents (
                     id TEXT PRIMARY KEY,
+                    hash TEXT,
                     encrypted_data BLOB,
                     indexed_at TEXT
                 )
             """)
+            # FTS5 Tabelle für Volltextsuche (unverschlüsselt für Performance, aber lokal)
+            # Hinweis: Wenn maximale Sicherheit gewünscht, müsste FTS5 entfallen, 
+            # aber für Performance ist dies der Standardweg.
+            try:
+                conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts_idx USING fts5(id UNINDEXED, content)")
+            except sqlite3.OperationalError:
+                # Falls FTS5 nicht verfügbar ist (selten)
+                pass
+            
+            # OCR Cache
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ocr_cache (
+                    hash TEXT PRIMARY KEY,
+                    text TEXT
+                )
+            """)
+            
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS metadata (
                     key TEXT PRIMARY KEY,
@@ -752,7 +771,7 @@ class EncryptIntelligenceManager:
             self._text_index.set_batch_mode(False)
             self._save_storage()
 
-    def index_text(self, name: str, text: str, metadata: dict) -> None:
+    def index_text(self, name: str, text: str, metadata: dict, file_hash: Optional[str] = None) -> None:
         normalized = _normalize_text(text)
         source = metadata.get("source", "unbekannt")
         doc_id = self._make_document_id(name, source)
@@ -768,8 +787,40 @@ class EncryptIntelligenceManager:
         }
         
         with self._index_lock:
-            self._save_document_to_db(doc_id, doc_data)
+            # In SQLite speichern
+            payload = json.dumps(doc_data, ensure_ascii=False).encode("utf-8")
+            encrypted = self._encrypt_blob(payload)
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO documents (id, hash, encrypted_data, indexed_at) VALUES (?, ?, ?, ?)",
+                    (doc_id, file_hash, encrypted, datetime.now().isoformat())
+                )
+                # FTS Index aktualisieren
+                try:
+                    conn.execute("INSERT OR REPLACE INTO fts_idx (id, content) VALUES (?, ?)", (doc_id, normalized))
+                except sqlite3.OperationalError:
+                    pass
+            
+            # In-Memory Index ebenfalls aktualisieren (Fallback)
             self._text_index.add(doc_id, normalized, metadata)
+
+    def is_already_indexed(self, name: str, source: str, file_hash: str) -> bool:
+        """Prüft via Hash, ob eine Datei bereits unverändert indiziert wurde."""
+        doc_id = self._make_document_id(name, source)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT hash FROM documents WHERE id = ?", (doc_id,))
+            row = cursor.fetchone()
+            return row is not None and row[0] == file_hash
+
+    def get_ocr_cache(self, file_hash: str) -> Optional[str]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT text FROM ocr_cache WHERE hash = ?", (file_hash,))
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+    def set_ocr_cache(self, file_hash: str, text: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("INSERT OR REPLACE INTO ocr_cache (hash, text) VALUES (?, ?)", (file_hash, text))
 
     def fetch_document(self, doc_id: str) -> Optional[dict]:
         with sqlite3.connect(self.db_path) as conn:
@@ -796,8 +847,36 @@ class EncryptIntelligenceManager:
     def search_documents(self, query: str, top_k: int = 5) -> List[dict]:
         if not query.strip():
             return []
-        results = self._text_index.search(query, top_k)
+            
+        # Versuche zuerst FTS5 Suche
         out = []
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # FTS5 nutzt BM25 Ranking automatisch
+                cursor = conn.execute(
+                    "SELECT id, snippet(fts_idx, 1, '...', '...', '...', 64) FROM fts_idx WHERE fts_idx MATCH ? ORDER BY rank LIMIT ?",
+                    (query, top_k)
+                )
+                for doc_id, snippet in cursor:
+                    doc = self.fetch_document(doc_id)
+                    if doc:
+                        out.append({
+                            "document_id": doc_id,
+                            "filename": doc["document_name"],
+                            "document_name": doc["display_name"],
+                            "metadata": doc["metadata"],
+                            "snippet": snippet,
+                            "text": doc["text"],
+                            "score": 1.0, # FTS5 Rank ist nicht direkt 0-1
+                            "source": doc["source"],
+                        })
+            if out:
+                return out
+        except sqlite3.OperationalError:
+            # Fallback auf In-Memory TF-IDF wenn FTS5 fehlschlägt
+            pass
+
+        results = self._text_index.search(query, top_k)
         for doc_id, score in results:
             doc = self.fetch_document(doc_id)
             if doc is None:
