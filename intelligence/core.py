@@ -8,11 +8,13 @@ import os
 import platform
 import re
 import socket
+import sqlite3
 import threading
 import time
 import uuid
 import zipfile
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -474,6 +476,10 @@ class DocumentExtractor:
             self.last_error = str(e)
             return ""
 
+def _parallel_extract_task(extractor_instance, name, raw):
+    """Globale Hilfsfunktion für Multiprocessing-Tasks."""
+    return extractor_instance.extract(name, raw)
+
 
 # ============================================================================
 # LLM-Client (nur gpt4all)
@@ -627,50 +633,58 @@ class EncryptIntelligenceConfig:
 # ============================================================================
 
 class EncryptIntelligenceManager:
-    """Manager für lokale Dokumentenindexierung (Keyword-Suche + LLM)."""
+    """Manager für lokale Dokumentenindexierung mit SQLite-Persistenz und Multiprocessing."""
 
     def __init__(self, config: Optional[EncryptIntelligenceConfig] = None):
         self.config = config or EncryptIntelligenceConfig()
-        self.index_path = self.config.storage_dir / f"{self.config.index_name}.enc"
+        self.db_path = self.config.storage_dir / "intelligence.db"
         self.key_path = self.config.storage_dir / "storage_key.bin"
 
-        self._storage: dict = {
-            "documents": {},
-            "metadata": {
-                "version": 3,
-                "created": datetime.now().isoformat(),
-                "updated": datetime.now().isoformat(),
-                "document_count": 0,
-            }
-        }
         self.last_index_report: dict = {"indexed": [], "skipped": []}
         self._last_extraction_error = ""
         self._index_lock = threading.Lock()
 
-        # Text-Index (Keyword-Suche, kein ML)
+        # Text-Index (Keyword-Suche)
         self._text_index = TextIndex()
 
         # System-Prompt je nach Tier
         self._system_prompt = get_system_prompt(self.config.model_tier)
 
-        # LLM (lädt im Hintergrund – GUI bleibt flüssig)
+        # LLM (lädt im Hintergrund)
         self.llm = LocalLLMClient(self.config.llm_model_path)
         self.llm.load_async()
 
         # Document Extractor
         self._extractor = DocumentExtractor()
+        self._executor = ProcessPoolExecutor(max_workers=os.cpu_count())
 
-        # Storage
-        self._legacy_storage_key = self._load_legacy_storage_key()
+        # Storage & Encryption
         self._storage_key = self._derive_storage_key()
-        self._load_storage()
+        self._init_db()
+        self._load_all_to_index()
 
-    # --- Storage I/O (verschlüsselt, device-bound) ---
+    # --- Storage I/O (SQLite + AES-GCM) ---
+
+    def _init_db(self) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS documents (
+                    id TEXT PRIMARY KEY,
+                    encrypted_data BLOB,
+                    indexed_at TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
 
     def _derive_storage_key(self) -> bytes:
         mac = uuid.getnode().to_bytes(6, "big", signed=False)
         raw = b"|".join([
-            b"EncryptIntelligence storage key v3",
+            b"EncryptIntelligence storage key v4",
             socket.gethostname().encode("utf-8", errors="ignore"),
             platform.system().encode("utf-8", errors="ignore"),
             platform.machine().encode("utf-8", errors="ignore"),
@@ -681,80 +695,46 @@ class EncryptIntelligenceManager:
         d.update(raw)
         return d.finalize()
 
-    def _load_legacy_storage_key(self) -> Optional[bytes]:
-        if not self.key_path.exists():
-            return None
-        try:
-            key = self.key_path.read_bytes()
-            return key if len(key) == 32 else None
-        except Exception:
-            return None
-
-    def _remove_legacy_storage_key(self) -> None:
-        try:
-            if self.key_path.exists():
-                self.key_path.unlink()
-        except Exception:
-            pass
-
     def _encrypt_blob(self, data: bytes) -> bytes:
         nonce = os.urandom(12)
         aesgcm = AESGCM(self._storage_key)
         return nonce + aesgcm.encrypt(nonce, data, None)
 
-    def _decrypt_blob(self, blob: bytes, key: Optional[bytes] = None) -> bytes:
+    def _decrypt_blob(self, blob: bytes) -> bytes:
         if len(blob) < 12:
             raise ValueError("Ungültige verschlüsselte Daten")
         nonce = blob[:12]
-        aesgcm = AESGCM(key or self._storage_key)
+        aesgcm = AESGCM(self._storage_key)
         return aesgcm.decrypt(nonce, blob[12:], None)
 
-    def _load_storage(self) -> None:
-        if not self.index_path.exists():
-            self._storage = {
-                "documents": {},
-                "metadata": {"version": 3, "created": datetime.now().isoformat(),
-                             "updated": datetime.now().isoformat(), "document_count": 0}
-            }
-            self._remove_legacy_storage_key()
-            return
-        raw = self.index_path.read_bytes()
-        try:
-            payload = self._decrypt_blob(raw)
-            self._storage = json.loads(payload.decode("utf-8"))
-            self._remove_legacy_storage_key()
-        except Exception:
-            if self._legacy_storage_key is None:
-                self._storage["documents"] = {}
-                return
-            try:
-                payload = self._decrypt_blob(raw, self._legacy_storage_key)
-                self._storage = json.loads(payload.decode("utf-8"))
-                self._save_storage()
-                self._remove_legacy_storage_key()
-            except Exception:
-                self._storage["documents"] = {}
-        # TextIndex aus gespeicherten Dokumenten aufbauen
-        self._rebuild_text_index()
-
-    def _rebuild_text_index(self) -> None:
+    def _load_all_to_index(self) -> None:
+        """Lädt alle Dokumente aus der DB in den In-Memory Suchindex."""
         self._text_index.clear()
-        for doc_id, doc in self._storage.get("documents", {}).items():
-            self._text_index.add(
-                doc_id, doc.get("text", ""),
-                doc.get("metadata", {})
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT id, encrypted_data FROM documents")
+            for doc_id, encrypted_data in cursor:
+                try:
+                    data = json.loads(self._decrypt_blob(encrypted_data).decode("utf-8"))
+                    self._text_index.add(doc_id, data["text"], data["metadata"])
+                except Exception:
+                    continue
+        self._text_index._rebuild_idf()
+
+    def _save_document_to_db(self, doc_id: str, data: dict) -> None:
+        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        encrypted = self._encrypt_blob(payload)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO documents (id, encrypted_data, indexed_at) VALUES (?, ?, ?)",
+                (doc_id, encrypted, datetime.now().isoformat())
             )
 
     def reload_storage(self) -> None:
-        self._load_storage()
+        self._load_all_to_index()
 
     def _save_storage(self) -> None:
-        self._storage["metadata"]["updated"] = datetime.now().isoformat()
-        payload = json.dumps(self._storage, ensure_ascii=False).encode("utf-8")
-        try:
-            self.index_path.write_bytes(self._encrypt_blob(payload))
-        except Exception:
-            pass
+        # Platzhalter für Kompatibilität mit altem Code
+        pass
 
     # --- Dokumenten-Management ---
 
@@ -776,26 +756,40 @@ class EncryptIntelligenceManager:
         normalized = _normalize_text(text)
         source = metadata.get("source", "unbekannt")
         doc_id = self._make_document_id(name, source)
+        
+        doc_data = {
+            "id": doc_id,
+            "text": normalized,
+            "metadata": metadata,
+            "document_name": name,
+            "source": source,
+            "display_name": name,
+            "indexed_at": datetime.now().isoformat(),
+        }
+        
         with self._index_lock:
-            self._storage["documents"][doc_id] = {
-                "id": doc_id,
-                "text": normalized,
-                "metadata": metadata,
-                "document_name": name,
-                "source": source,
-                "display_name": name,
-                "indexed_at": datetime.now().isoformat(),
-            }
+            self._save_document_to_db(doc_id, doc_data)
             self._text_index.add(doc_id, normalized, metadata)
-            self._storage["metadata"]["document_count"] = len(self._storage["documents"])
-            if not self._text_index._batch_mode:
-                self._save_storage()
 
     def fetch_document(self, doc_id: str) -> Optional[dict]:
-        return self._storage["documents"].get(doc_id)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT encrypted_data FROM documents WHERE id = ?", (doc_id,))
+            row = cursor.fetchone()
+            if row:
+                return json.loads(self._decrypt_blob(row[0]).decode("utf-8"))
+        return None
 
     def list_documents(self) -> List[str]:
-        return sorted(d["display_name"] for d in self._storage["documents"].values())
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT encrypted_data FROM documents")
+            names = []
+            for row in cursor:
+                try:
+                    data = json.loads(self._decrypt_blob(row[0]).decode("utf-8"))
+                    names.append(data.get("display_name", "Unbekannt"))
+                except Exception:
+                    continue
+            return sorted(names)
 
     # --- Suche ---
 
@@ -805,7 +799,7 @@ class EncryptIntelligenceManager:
         results = self._text_index.search(query, top_k)
         out = []
         for doc_id, score in results:
-            doc = self._storage["documents"].get(doc_id)
+            doc = self.fetch_document(doc_id)
             if doc is None:
                 continue
             snippet = _make_snippet(doc["text"], query, max_length=400)
