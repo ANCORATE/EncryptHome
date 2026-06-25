@@ -98,7 +98,7 @@ _MODEL_REGISTRY = {
             "wurden von einer Suchmaschine aus dem verschlüsselten Tresor "
             "des Benutzers abgerufen. Antworte AUSSCHLIESSLICH auf Basis "
             "dieser Dokumente. Wenn die Dokumente keine Antwort enthalten, "
-            "sage es klar. Antworte natürlich und prägnant auf Deutsch."
+            "sage es klar. Antworte natürlich und prägnant in der Sprache der Anfrage."
         ),
     },
     TIER_PRO: {
@@ -115,7 +115,7 @@ _MODEL_REGISTRY = {
             "des Benutzers abgerufen. Antworte AUSSCHLIESSLICH auf Basis "
             "dieser Dokumente. Wenn die Dokumente keine Antwort enthalten, "
             "sage es klar. Analysiere gründlich und beziehe dich auf "
-            "konkrete Textstellen. Antworte auf Deutsch."
+            "konkrete Textstellen. Antworte in der Sprache der Anfrage."
         ),
     },
 }
@@ -142,7 +142,7 @@ def resolve_model_path(tier: str) -> Optional[Path]:
 def get_system_prompt(tier: str) -> str:
     info = get_model_info(tier)
     if info is None:
-        return "Du bist ein hilfsbereiter Assistent für verschlüsselte Dokumente."
+        return "Du bist EncryptIntelligence, ein hilfsbereiter Assistent von ANCORATE für verschlüsselte Dokumente."
     return info["system_prompt"]
 
 
@@ -183,17 +183,12 @@ def download_model(
                     h.update(chunk)
             if h.hexdigest() != info["md5"]:
                 dest.unlink()
-                raise ValueError("MD5-Prüfung fehlgeschlagen – Download korrupt")
+                raise ValueError("Download-Prüfung fehlgeschlagen – Download ist beschädigt")
         return dest
     except Exception:
         if temp_dest.exists():
             temp_dest.unlink()
         raise
-
-
-# ============================================================================
-# Tokenisierung & Text-Helfer
-# ============================================================================
 
 
 # ============================================================================
@@ -268,6 +263,7 @@ class TextIndex:
         self._idf: Dict[str, float] = {}
         self._inverted_index: Dict[str, List[str]] = {}
         self._batch_mode = False
+        print("Indexierung gestartet")
 
     def set_batch_mode(self, enabled: bool) -> None:
         """Aktiviert/Deaktiviert den Batch-Modus. Bei Deaktivierung wird der IDF-Index neu aufgebaut."""
@@ -897,12 +893,31 @@ class EncryptIntelligenceManager:
     # --- Statistiken ---
 
     def get_statistics(self) -> dict:
-        docs = self._storage.get("documents", {})
+        with sqlite3.connect(self.db_path) as conn:
+            # Dokumente zählen
+            cursor = conn.execute("SELECT COUNT(*) FROM documents")
+            row = cursor.fetchone()
+            doc_count = row[0] if row else 0
+            
+            # Gesamttextgröße berechnen
+            cursor = conn.execute("SELECT encrypted_data FROM documents")
+            total_text_size = 0
+            for row in cursor:
+                try:
+                    data = json.loads(self._decrypt_blob(row[0]).decode("utf-8"))
+                    total_text_size += len(data.get("text", ""))
+                except Exception:
+                    continue
+            
+            # Metadaten laden
+            cursor = conn.execute("SELECT key, value FROM metadata")
+            metadata = {row[0]: row[1] for row in cursor}
+        
         return {
-            "documents_indexed": len(docs),
-            "total_text_size": sum(len(d.get("text", "")) for d in docs.values()),
+            "documents_indexed": doc_count,
+            "total_text_size": total_text_size,
             "storage_location": str(self.config.storage_dir),
-            "metadata": self._storage.get("metadata", {}),
+            "metadata": metadata,
         }
 
     # --- Capability Status ---

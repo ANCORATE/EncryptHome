@@ -2001,14 +2001,13 @@ class App(QWidget):
 
     # ------------------ Menüleiste ------------------
     def add_menubar(self):
-        menubar = QMenuBar()
-        menus = [
-            QMenu("Datei", self),
-            QMenu("Bearbeiten", self),
-            QMenu("EncryptIntelligence", self),
-            QMenu("Hilfe", self),
-        ]
+        self._rebuild_menubar()
 
+    def _rebuild_menubar(self):
+        menubar = QMenuBar()
+        
+        # Datei-Menü
+        file_menu = QMenu("Datei", self)
         actions_file = [
             QAction("Neuer Tresor", self),
             QAction("Tresor öffnen", self),
@@ -2019,20 +2018,6 @@ class App(QWidget):
             None,  # Separator
             QAction("Einstellungen", self),
         ]
-        actions_edit = [
-            QAction("Datei(en) hinzufügen", self),
-            QAction("Dateivorschau starten", self),
-            QAction("Datei löschen", self),
-            QAction("Datei exportieren", self),
-            QAction("Alles exportieren", self),
-        ]
-        intelligence_menu = QMenu("EncryptIntelligence", self)
-        open_intelligence_action = QAction("EncryptIntelligence öffnen", self)
-        help_menu = QMenu("Hilfe", self)
-        update_check_action = QAction("Auf Updates prüfen", self)
-        about_action = QAction(f"Über {edition} {version_year}", self)
-
-        # Verbindungen
         actions_file[1].triggered.connect(lambda: self.choose_container(1))
         actions_file[0].triggered.connect(lambda: self.choose_container(2))
         actions_file[2].triggered.connect(self.show_recent_containers)
@@ -2040,37 +2025,48 @@ class App(QWidget):
         actions_file[4].triggered.connect(self.close_container)
         actions_file[5].triggered.connect(self.delete_container)
         actions_file[7].triggered.connect(lambda: self.show_settings_dialog())
-        open_intelligence_action.triggered.connect(self.show_intelligence_dialog)
-        update_check_action.triggered.connect(self.check_updates_quick)
-        about_action.triggered.connect(self.show_about_dialog)
+        for a in actions_file:
+            if a is None:
+                file_menu.addSeparator()
+            else:
+                file_menu.addAction(a)
 
+        # Bearbeiten-Menü
+        edit_menu = QMenu("Bearbeiten", self)
+        actions_edit = [
+            QAction("Datei(en) hinzufügen", self),
+            QAction("Dateivorschau starten", self),
+            QAction("Datei löschen", self),
+            QAction("Datei exportieren", self),
+            QAction("Alles exportieren", self),
+        ]
         actions_edit[0].triggered.connect(self.add_file_dialog)
         actions_edit[1].triggered.connect(self.preview_selected)
         actions_edit[2].triggered.connect(self.delete_selected)
         actions_edit[3].triggered.connect(self.export_selected)
         actions_edit[4].triggered.connect(self.export_all)
-
-        help_actions = [update_check_action, about_action]
-
-        # for file menu
-        for a in actions_file:
-            if a is None:
-                menus[0].addSeparator()
-            else:
-                menus[0].addAction(a)
-        # for edit menu
         for a in actions_edit:
-            menus[1].addAction(a)
-        # for EncryptIntelligence menu
-        intelligence_menu.addAction(open_intelligence_action)
-        menus[2] = intelligence_menu
-        # for help menu
-        for a in help_actions:
-            help_menu.addAction(a)
-        menus[3] = help_menu
+            edit_menu.addAction(a)
 
-        for m in menus:
-            menubar.addMenu(m)
+        # EncryptIntelligence-Menü (nur wenn aktiviert)
+        if self.data.get("encrypt_intelligence_enabled", False):
+            intelligence_menu = QMenu("EncryptIntelligence BETA", self)
+            open_intelligence_action = QAction("EncryptIntelligence BETA öffnen", self)
+            open_intelligence_action.triggered.connect(self.show_intelligence_dialog)
+            intelligence_menu.addAction(open_intelligence_action)
+            menubar.addMenu(intelligence_menu)
+
+        # Hilfe-Menü
+        help_menu = QMenu("Hilfe", self)
+        about_action = QAction(f"Über {edition} {version_year}", self)
+        about_action.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(about_action)
+
+        # Menüs hinzufügen
+        menubar.addMenu(file_menu)
+        menubar.addMenu(edit_menu)
+        menubar.addMenu(help_menu)
+        
         self.layout.setMenuBar(menubar)
 
     # ------------------ Dialoge ------------------
@@ -2247,8 +2243,8 @@ class App(QWidget):
         if manager is None:
             QMessageBox.critical(
                 self,
-                "EncryptIntelligence",
-                "EncryptIntelligence konnte nicht geladen werden.",
+                "EncryptIntelligence BETA",
+                "EncryptIntelligence BETA konnte nicht geladen werden.",
             )
             return
 
@@ -2354,19 +2350,28 @@ class App(QWidget):
     def apply_behavior_settings(self, settings):
         """Verhaltens-Einstellungen aktualisieren"""
         try:
+            old_enabled = self.data.get("encrypt_intelligence_enabled", False)
             self.data = settings
-            if self.data.get("encrypt_intelligence_enabled", False):
+            new_enabled = self.data.get("encrypt_intelligence_enabled", False)
+            
+            if new_enabled and not old_enabled:
                 if self.intelligence_manager is None:
                     self._start_intelligence_init()
-            else:
+            elif not new_enabled and old_enabled:
                 if not hasattr(self, "_intelligence_dialog") or self._intelligence_dialog is None:
                     self._reset_intelligence_init()
+            
             if (
                 hasattr(self, "_intelligence_dialog")
                 and self._intelligence_dialog is not None
                 and self.intelligence_manager is not None
             ):
                 self._intelligence_dialog.manager = self.intelligence_manager
+            
+            # Menüleiste neu aufbauen wenn sich EncryptIntelligence-Status geändert hat
+            if old_enabled != new_enabled:
+                self._rebuild_menubar()
+            
             print("[SETTINGS] Verhaltens-Einstellungen aktualisiert")
         except Exception as e:
             print(f"[SETTINGS] Verhaltens-Fehler: {e}")

@@ -165,7 +165,7 @@ class SettingsDialog(QDialog):
             "Allgemein",
             "Kurzbefehle",
             "Design",
-            "EncryptIntelligence",
+            "EncryptIntelligence BETA",
             "Updates",
         ])
         self.category_list.setFixedWidth(180)
@@ -465,12 +465,12 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        title = QLabel("EncryptIntelligence")
+        title = QLabel("EncryptIntelligence BETA")
         title.setStyleSheet("font-weight: bold; font-size: 18px; color: #ffffff;")
         layout.addWidget(title)
 
         description = QLabel(
-            "EncryptIntelligence hilft dir, verschlüsselte Dokumente schnell zu durchsuchen."
+            "Sie sind dazu eingeladen, EncryptIntelligence BETA zu testen. Bitte beachten Sie, dass dies eine Beta-Version ist und noch nicht vollständig getestet wurde. Wir freuen uns über Ihr Feedback!"
         )
 
         description.setWordWrap(True)
@@ -479,7 +479,7 @@ class SettingsDialog(QDialog):
         layout.addSpacing(8)
 
         # --- Enable/Disable ---
-        self.cb_intelligence_enabled = QCheckBox("EncryptIntelligence aktivieren")
+        self.cb_intelligence_enabled = QCheckBox("EncryptIntelligence BETA aktivieren")
         self.cb_intelligence_enabled.setChecked(
             self.data.get("encrypt_intelligence_enabled", False)
         )
@@ -499,14 +499,14 @@ class SettingsDialog(QDialog):
             self._save_intelligence_settings
         )
         self.cb_search_integration.setToolTip(
-            "Wenn aktiviert, werden Suchanfragen auch gegen den lokalen EncryptIntelligence-Index ausgeführt."
+            "Wenn aktiviert, werden Suchanfragen auch gegen den lokalen EncryptIntelligence BETA-Index ausgeführt."
         )
         layout.addWidget(self.cb_search_integration)
 
         layout.addSpacing(8)
 
         # --- Model Selection ---
-        self.model_group = QGroupBox("Modell auswählen und herunterladen")
+        self.model_group = QGroupBox("Modell auswählen und herunterladen (BETA)")
         self.model_group.setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; margin-top: 12px; } QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }")
         model_group_layout = QVBoxLayout()
         model_group_layout.setContentsMargins(16, 20, 16, 16)

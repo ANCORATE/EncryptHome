@@ -65,7 +65,7 @@ class EncryptIntelligenceDialog(QDialog):
 
     def __init__(self, parent=None, manager=None):
         super().__init__(parent)
-        self.setWindowTitle("EncryptIntelligence")
+        self.setWindowTitle("EncryptIntelligence BETA")
         self.resize(1400, 800)
         self.setMinimumSize(1000, 600)
         self.setModal(False)
@@ -112,7 +112,7 @@ class EncryptIntelligenceDialog(QDialog):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
-        header = QLabel("EncryptIntelligence")
+        header = QLabel("EncryptIntelligence BETA")
         f = QFont()
         f.setPointSize(24)
         f.setBold(True)
@@ -226,14 +226,14 @@ class EncryptIntelligenceDialog(QDialog):
     def _update_status(self) -> None:
         tier = self.manager.config.model_tier.replace("EncryptIntelligence ", "")
         if self.manager.llm.is_available():
-            self.llm_status.setText(f"✓ EncryptIntelligence ({tier})")
+            self.llm_status.setText(f"✓ EncryptIntelligence BETA ({tier})")
             self.llm_status.setStyleSheet("color: #10b981;")
         elif self.manager.llm.is_loading():
-            self.llm_status.setText(f"⏳ EncryptIntelligence ({tier}) lädt...")
+            self.llm_status.setText(f"⏳ EncryptIntelligence BETA ({tier}) lädt...")
             self.llm_status.setStyleSheet("color: #facc15;")
         else:
             error = (self.manager.llm.load_error() or "offline")[:30]
-            self.llm_status.setText(f"⚠ EncryptIntelligence ({tier}: {error})")
+            self.llm_status.setText(f"⚠ EncryptIntelligence BETA ({tier}: {error})")
             self.llm_status.setStyleSheet("color: #facc15;")
 
         docs = len(self.manager.list_documents())
@@ -248,19 +248,19 @@ class EncryptIntelligenceDialog(QDialog):
     def _on_loading_check(self) -> None:
         tier = self.manager.config.model_tier.replace("EncryptIntelligence ", "")
         if self.manager.llm.is_loading():
-            self.llm_status.setText(f"⏳ EncryptIntelligence ({tier}) lädt...")
+            self.llm_status.setText(f"⏳ EncryptIntelligence BETA ({tier}) lädt...")
             self.llm_status.setStyleSheet("color: #facc15;")
         elif self.manager.llm.is_available():
-            self.llm_status.setText(f"✓ EncryptIntelligence ({tier})") 
+            self.llm_status.setText(f"✓ EncryptIntelligence BETA ({tier})") 
             self.llm_status.setStyleSheet("color: #10b981;")
             self._loading_timer.stop()
         elif self.manager.llm.load_error():
             error = self.manager.llm.load_error()[:30]
-            self.llm_status.setText(f"⚠ EncryptIntelligence ({tier}: {error})")
+            self.llm_status.setText(f"⚠ EncryptIntelligence BETA ({tier}: {error})")
             self.llm_status.setStyleSheet("color: #facc15;")
             self._loading_timer.stop()
         else:
-            self.llm_status.setText(f"⏳ EncryptIntelligence ({tier}) lädt...") 
+            self.llm_status.setText(f"⏳ EncryptIntelligence BETA ({tier}) lädt...") 
             self.llm_status.setStyleSheet("color: #facc15;")
 
     def _auto_index_if_needed(self) -> None:
@@ -281,7 +281,7 @@ class EncryptIntelligenceDialog(QDialog):
         if not question:
             return
         self.chat_display.append(f"<b style='color:#3f8cff'>Du:</b> {question}\n")
-        self.chat_display.append("<b style='color:#2f7cf6'>EncryptIntelligence:</b>\n")
+        self.chat_display.append("<b style='color:#2f7cf6'>EncryptIntelligence BETA:</b>\n")
         self.chat_input.clear()
         self.send_button.setEnabled(False)
         self.status_bar.setVisible(True)
