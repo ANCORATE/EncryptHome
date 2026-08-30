@@ -11,6 +11,8 @@ Complete API reference for all EncryptHome modules, functions, and classes.
 - [utilities/settings.py](#utilitiessettingspy)
 - [utilities/header_utils.py](#utilitiesheader_utilspy)
 - [utilities/checksum_check.py](#utilitieschecksum_checkpy)
+- [utilities/sos_delete.py](#utilitiessos_deletepy)
+- [utilities/updater.py](#utilitiesupdaterpy)
 
 ---
 
@@ -85,7 +87,7 @@ nonce(12B) | ciphertext | tag(16B) | hmac(32B)
 
 ---
 
-#### `encrypt_file_to_blob(src_path: str, out_fh, master_key: bytes, progress_cb=None, stop_event: threading.Event | None=None)`
+#### `encrypt_file_to_blob(src_path: str, out_fh, master_key: bytes, filename: str | None = None, progress_cb=None, stop_event: threading.Event | None=None)`
 
 Encrypts a file to an encrypted blob structure.
 
@@ -93,6 +95,7 @@ Encrypts a file to an encrypted blob structure.
 - `src_path` (str): Path to source file
 - `out_fh`: Output file handle (must support write)
 - `master_key` (bytes): 32-byte master key
+- `filename` (str, optional): Logical file name used for subkey derivation (defaults to `basename(src_path)`)
 - `progress_cb` (callable, optional): Progress callback function
 - `stop_event` (threading.Event, optional): Cancellation event
 
@@ -116,7 +119,7 @@ file_nonce(16B) | gcm_nonce(12B) | ciphertext | tag(16B) | hmac(32B)
 
 **Progress Callback:**
 - Called with percentage (0-100)
-- Updates at most every 90% of file progress
+- File progress is scaled to 0-90 (the remaining 10% is reserved for finalization)
 
 **Cancellation:**
 - Checks stop_event before each chunk
@@ -475,6 +478,72 @@ Custom file list widget with drag-and-drop support.
 
 ### Functions
 
+#### `derive_argon2(password_bytes: bytes, salt: bytes) -> bytes`
+
+Runs the raw Argon2id KDF used for password hardening.
+
+**Parameters:**
+- `password_bytes` (bytes): Password bytes (pre-mixed with the project pepper by `derive_master_key`)
+- `salt` (bytes): 16-byte random salt
+
+**Returns:** bytes - 32-byte Argon2id-derived key
+
+**Parameters:** time=3, memory=131072 KiB, parallelism=4, hash_len=32 (Argon2id)
+
+---
+
+#### `derive_master_key(password: str, salt: bytes, device_bound: bool = False, device_key: Optional[bytes] = None) -> bytes`
+
+Derives the container master key from the password (and optional device key).
+
+**Parameters:**
+- `password` (str): User password
+- `salt` (bytes): 16-byte container salt
+- `device_bound` (bool): Whether the container uses device binding
+- `device_key` (bytes, optional): 32-byte device key (required if `device_bound`)
+
+**Returns:** bytes - 32-byte AES-256 master key
+
+**Process:**
+1. `pwd_key = Argon2id(password + PROJECT_PEPPER, salt)`
+2. `device_hash = SHA256(device_key)` if bound, else empty
+3. `master = HKDF-SHA256(pwd_key + device_hash, salt=salt, info=HKDF_INFO)`
+
+**Raises:** `ValueError` if the salt is not 16 bytes or a bound container has no valid 32-byte `device_key`.
+
+---
+
+#### `validate_password_strength(password: str) -> tuple[bool, str]`
+
+Validates password strength against the project policy.
+
+**Returns:** tuple[bool, str] - `(is_valid, error_message)`
+
+**Requirements (all must hold):**
+- At least 8 characters
+- At least 1 uppercase letter
+- At least 1 lowercase letter
+- At least 1 digit
+- At least 1 special character (from `!@#$%^&*()_+-=[]{}|;:,.<>?`)
+
+---
+
+#### `write_header(fh, flags: int, salt: bytes)`
+
+Writes the 28-byte ANCORATE header (`MAGIC | VERSION | flags | salt | reserved`) at the start of the file.
+
+**Raises:** `ValueError` if the salt is not 16 bytes or flags are not in 0-255.
+
+---
+
+#### `read_header(fh)`
+
+Reads and validates the header of an open container, repairing it if damaged.
+
+**Returns:** tuple[flags, salt]
+
+---
+
 #### `device_fingerprint() -> bytes`
 
 Generates device fingerprint from hardware identifiers.
@@ -584,19 +653,19 @@ DEFAULT_SETTINGS = {
     "search_seq": "Return",
     "crea_vault_seq": "Ctrl+N",
     "del_vault_seq": "Alt+Del",
-    
+
     # Design
     "theme": "Standard-dark",
-    
+
     # Updater
     "update_url": UPDATE_URL,
-    
+
     # System & Behavior
     "confirm_exit": True,
     "del_source_added": False,
-    
+
     # Security & Paths
-    "deletion_method": "Standard",  # Standard, DoD, Gutmann
+    "deletion_method": "Standard",  # Standard, DoD, Gutmann, ANCORATE ...
 }
 ```
 
@@ -612,15 +681,15 @@ SettingsDialog.__init__(parent=None)
 ```
 
 **Tabs:**
-- General: System behavior settings
-- Shortcuts: Keyboard shortcut configuration
-- Design: Theme and appearance
-- Updates: Update configuration
+- General ("Allgemein"): System behavior, security/deletion method, maintenance
+- Shortcuts ("Kurzbefehle"): Keyboard shortcut configuration
+- Design: Theme and appearance (Standard-light/dark, Quantum, Precision, Hacker's, Cyber-blue)
+- Updates: Changelog, update check and install
 
 **Methods:**
 - `display_category(row)`: Switch between tabs
-- `save()`: Save settings
-- `_save_immediate()`: Auto-save on change
+- `save()`: Close and confirm the dialog
+- `_save_immediate()`, `_save_deletion_method()`, `_save_theme()`, `_save_shortcuts()`: Immediate (auto-save) handlers
 
 ---
 
@@ -894,6 +963,53 @@ Logs checksum verification action.
 ```
 
 **Append Mode:** Adds to existing log file
+
+---
+
+## utilities/sos_delete.py
+
+Emergency vault scanner and wiper.
+
+### Class
+
+#### `SaltScannerUI(QWidget)`
+
+Scans all mounted drives for `.salt` vaults and deletes them in an emergency.
+
+**Methods:**
+- `run_scan()`: Starts a background scan of all drives for `.salt` files
+- `emergency_delete()`: Unconditionally deletes all listed vaults
+- `_update_ui_progress()`, `_scan_complete()`, `_scan_error()`, `_delete_complete()`: UI callbacks
+
+### Functions
+
+- `get_all_drives() -> list`: Lists existing drive mount points (via psutil)
+- `search_salt_files(start_dir) -> list`: Walks a directory tree collecting `.salt` paths
+
+> The actual secure-overwrite deletion methods are implemented in `main.py._secure_overwrite`
+> (Standard / DoD 5220.22-M / Gutmann / ANCORATE Vaporizer 1 / Furnace Max / Shatterer Ultra).
+
+---
+
+## utilities/updater.py
+
+Application update mechanism.
+
+### Class
+
+#### `EncryptHomeUpdater`
+
+Downloads and launches the EncryptHome installer.
+
+**Constructor:**
+```python
+EncryptHomeUpdater(current_version: str, update_json_url: str)
+```
+
+**Methods:**
+- `run() -> dict`: Checks the update feed; returns `{"status": "NO_UPDATE" | "UPDATE_AVAILABLE", "data": ...}`
+- `start_update()`: Downloads the installer, verifies its SHA-256, launches it (UAC on Windows) and exits
+- `_fetch_latest_json()`, `_download_file()`, `_verify_sha256()`: Internal helpers
 
 ---
 

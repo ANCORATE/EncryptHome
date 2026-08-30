@@ -11,7 +11,6 @@ import platform
 import subprocess
 import tempfile
 import threading
-import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -669,10 +668,6 @@ class PreviewDialog(QDialog):
                 subprocess.run(["open", tmp_path])
             else:  # Linux
                 subprocess.run(["xdg-open", tmp_path])
-
-            # Datei später löschen (optional - könnte auch bleiben)
-            time.sleep(5)
-            os.unlink(tmp_path)  # Auskommentiert, damit User das PDF behalten kann
         except Exception as e:
             QMessageBox.warning(
                 self,
@@ -682,9 +677,12 @@ class PreviewDialog(QDialog):
             )
 
     def _build_binary(self, layout: QVBoxLayout, data: bytes, hint: str = ""):
-        label = QLabel(
-            "❌ Dieser Dateityp wird leider aktuell nicht unterstützt.\nUnterstützte Dateitypen: .pdf, .txt, .png, .jpg, .jpeg, .bmp, .gif, .webp, .mp4, .m4v, .mov, .avi, .mkv, .webm, .wmv, .mpg, .mpeg, .3gp, .3g2, .flv"
+        text = (
+            hint
+            if hint
+            else "❌ Dieser Dateityp wird leider aktuell nicht unterstützt.\nUnterstützte Dateitypen: .pdf, .txt, .png, .jpg, .jpeg, .bmp, .gif, .webp, .mp4, .m4v, .mov, .avi, .mkv, .webm, .wmv, .mpg, .mpeg, .3gp, .3g2, .flv"
         )
+        label = QLabel(text)
         label.setWordWrap(True)
         label.setAlignment(
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter

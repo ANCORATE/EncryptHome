@@ -29,7 +29,7 @@ EncryptHome implements a multi-layered security architecture designed to protect
 ```
 User Password
     ↓
-Project Pepper (fixed)
+Project Pepper (fixed, appended to password)
     ↓
 Argon2id Key Derivation
     ├─ Time Cost: 3
@@ -37,9 +37,11 @@ Argon2id Key Derivation
     ├─ Parallelism: 4
     └─ Output: 32 bytes
     ↓
-Device Key (if device-bound)
+Password-derived key (32 bytes)
     ↓
-Master Key (32 bytes - AES-256)
+Device Key hash (SHA-256) if device-bound
+    ↓
+HKDF-SHA256 (salt=salt, info=HKDF_INFO) → Master Key (32 bytes)
     ↓
 HKDF-SHA256 (per-file)
     ├─ Salt: File nonce (16 bytes)
@@ -317,30 +319,26 @@ def verify_file_integrity(file_path: str = None, update=False):
 ### Password Policy
 
 #### Password Requirements
-- **Minimum Length**: No enforced minimum (user responsibility)
-- **Complexity**: No enforced complexity (user responsibility)
+- **Minimum Length**: 8 characters (enforced)
+- **Complexity**: At least one uppercase letter, lowercase letter, digit and special character (enforced via `validate_password_strength`)
 - **Storage**: Never stored in plaintext
-- **Derivation**: Argon2id with strong parameters
+- **Derivation**: Argon2id with strong parameters + HKDF-SHA256
 
 #### Authentication Flow
 ```
 User enters password
     ↓
-Derive master key using password + salt
+Derive master key using password + salt (+ device key if bound)
     ↓
 Attempt to decrypt metadata
     ↓
 If success: Unlock vault
-If failure: Increment attempt counter
-    ↓
-After 3 failures: Lock vault
+If failure: Show a password/device error
 ```
 
 #### Attempt Limiting
-- **Maximum Attempts**: 3
-- **Lockout Duration**: Session-based
-- **Reset**: Application restart
-- **Purpose**: Prevent brute force attacks
+- **Maximum Attempts**: Not enforced by the application (the `MAX_ATTEMPTS` constant exists but no active lockout is wired); protection relies on strong Argon2id KDF parameters
+- **Purpose**: Offline brute-force resistance is provided by the expensive KDF rather than an in-app counter
 
 ### Device Authentication
 
@@ -360,42 +358,43 @@ if flags & FLAG_DEVICE:
 
 ## Secure Deletion
 
+Secure deletion overwrites the target data in-place before it is removed. Each pass writes cryptographically random bytes (via `os.urandom`), and data is `fsync`ed between passes.
+
 ### Deletion Methods
 
-#### Standard Deletion
-- **Method**: Single overwrite with zeros
+#### Standard
 - **Passes**: 1
 - **Speed**: Fast
 - **Security**: Basic protection
 
-#### DoD 5220.22-M
-- **Method**: Multi-pass overwrite
-- **Pattern**: zeros, ones, random
+#### DoD 5220.22-M (3x)
 - **Passes**: 3
 - **Speed**: Medium
-- **Security**: Government standard
+- **Security**: Government-standard erasure
 
-#### Gutmann Method
-- **Method**: Complex multi-pass pattern
-- **Pattern**: 35 specific patterns
+#### Gutmann (35x)
 - **Passes**: 35
 - **Speed**: Slow
-- **Security**: Maximum protection
+- **Security**: High overwrite count
 
-### Secure Deletion Implementation
-```python
-def secure_delete(file_path: str, method: str = "Standard"):
-    if method == "Standard":
-        # Single pass with zeros
-        pass_single_overwrite(file_path)
-    elif method == "DoD":
-        # Three-pass DoD pattern
-        pass_dod_pattern(file_path)
-    elif method == "Gutmann":
-        # 35-pass Gutmann pattern
-        pass_gutmann_pattern(file_path)
-    os.remove(file_path)
-```
+#### ANCORATE Vaporizer 1 (100x)
+- **Passes**: 100
+- **Speed**: Very slow (>1 minute)
+- **Security**: Heavy multi-pass overwrite
+
+#### ANCORATE Furnace Max (200x)
+- **Passes**: 200
+- **Speed**: Very slow (>5 minutes)
+- **Security**: Intended for large files
+
+#### ANCORATE Shatterer Ultra (300x)
+- **Passes**: 300
+- **Speed**: Extremely slow (>10 minutes)
+- **Security**: Warning issued — should not be used on HDDs (risk of physical damage)
+
+> The pass count is selected in `App._secure_overwrite` based on the configured `deletion_method`.
+> `utilities/sos_delete.py` provides a separate *Emergency Data Wiper* that scans for and deletes whole
+> vault files (used for the "Alle Tresore löschen" settings action).
 
 ## Threat Analysis
 

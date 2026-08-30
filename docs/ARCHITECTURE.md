@@ -49,10 +49,12 @@ EncryptHome follows a modular architecture with clear separation of concerns bet
 
 **Key Classes:**
 - `App(QWidget)` - Main application window
-- `SetupDialog(QDialog)` - Vault creation wizard
-- `LoginDialog(QDialog)` - Authentication interface
-- `FileDropList(QListWidget)` - Custom file list widget
-- Various worker threads for background operations
+- `SetupDialog(QDialog)` - Device (PC-key) registration upon first run
+- `LoginDialog(QDialog)` - Device-based login/authentication
+- `FileDropList(QListWidget)` - Custom file list widget with drag-and-drop
+- `FreshStartup(QWidget)` - Animated splash/startup screen
+- `WelcomeOverlay`, `TermsOfServiceDialog`, `UpdateNewsDialog`, `DetailDialog`, `AboutDialog` - Supporting dialogs
+- Various worker objects for background operations
 
 **Data Flow:**
 ```
@@ -165,11 +167,16 @@ Application Start → Load stored checksums → Calculate current checksums →
 Compare → Notify user of changes → Log verification results
 ```
 
-#### sos_delete.py (Secure Deletion)
+#### sos_delete.py (Emergency Vault Wiper)
 **Responsibilities:**
-- Secure file deletion operations
-- Multiple deletion algorithms (Standard, DoD, Gutmann)
-- UI integration for deletion method selection
+- Scan all mounted drives for `.salt` vault containers (`SaltScannerUI`)
+- Emergency deletion of all found vaults
+- Used for the "Alle Tresore löschen" maintenance action in Settings
+
+> Note: The secure overwrite algorithms (Standard, DoD 5220.22-M, Gutmann,
+> ANCORATE Vaporizer 1 (100x), ANCORATE Furnace Max (200x),
+> ANCORATE Shatterer Ultra (300x)) are implemented in `main.py._secure_overwrite`
+> and are used when deleting a single file or the whole container from within the app.
 
 ## Data Flow Architecture
 
@@ -177,17 +184,15 @@ Compare → Notify user of changes → Log verification results
 ```
 User initiates vault creation
     ↓
-SetupDialog collects password and options
+choose_container(2) selects location and a name
+    ↓
+Get password (with strength requirements)
     ↓
 Generate random salt (16 bytes)
     ↓
-Derive master key (Argon2id)
+Derive master key (Argon2id + HKDF, optional device binding)
     ↓
-Generate device fingerprint (if device binding enabled)
-    ↓
-Create container with header
-    ↓
-Initialize empty metadata
+Build empty metadata {"files": [], "created": ..., "flags": flags}
     ↓
 Encrypt and write metadata
     ↓
@@ -241,21 +246,24 @@ Update UI with progress
 ```
 User initiates password change
     ↓
-Verify current password
+Verify new password meets strength requirements
     ↓
 Generate new salt
     ↓
-Derive new master key with new password
+Derive new master key with new password (and device key if bound)
     ↓
-For each file in container:
-    - Decrypt with old master key
-    - Re-encrypt with new master key
+For each file blob in container:
+    - Decrypt blob with old master key (decrypt_blob_range)
+    - Re-encrypt with new master key (encrypt_file_to_blob)
+    - Record new blob length/offset
     ↓
-Update header with new salt
+Write new header (with new salt)
+    ↓
+Write all re-encrypted blobs
     ↓
 Re-encrypt metadata with new master key
     ↓
-Rewrite container
+Atomic rewrite of the container
 ```
 
 ## Container Format Architecture
@@ -311,12 +319,12 @@ Offset | Size | Description
 ## Threading Architecture
 
 ### Worker Threads
-- **AddWorker**: Handles file encryption operations
+- **AddWorker**: Handles file encryption into the container
 - **ExportWorker**: Handles single file decryption
 - **ExportBatchWorker**: Handles batch file decryption
-- **PreviewDecryptWorker**: Handles preview decryption
-- **ChangelogWorker**: Handles update checking
-
+- **PreviewDecryptWorker**: Handles in-memory preview decryption
+- **ChangelogWorker**: Fetches the changelog for the Settings dialog
+- **StartupUpdateWorker**: Checks for updates in the background on startup
 ### Thread Safety
 - PyQt6 signals/slots for cross-thread communication
 - Stop events for cancellation support
@@ -326,10 +334,10 @@ Offset | Size | Description
 ## Error Handling Architecture
 
 ### Error Categories
-1. **Cryptographic Errors**: Invalid passwords, corrupted data
-2. **I/O Errors**: File access issues, disk full
-3. **Authentication Errors**: Too many attempts, device mismatch
-4. **Validation Errors**: Invalid container format, corrupted headers
+1. **Cryptographic Errors**: Invalid password, corrupted/tampered data (HMAC/GCM failures)
+2. **I/O Errors**: File access issues, disk full, unexpected EOF
+3. **Authentication Errors**: Device mismatch (wrong device key)
+4. **Validation Errors**: Invalid container format, corrupted headers, pro-vault flag present
 
 ### Error Recovery
 - Graceful degradation where possible

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # ANCORATE EncryptHome
 # © 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
 # IF YOU ARE READING OR MODIFYING THIS CODE WITHOUT AUTHORIZATION, YOU ARE IN VIOLATION OF COPYRIGHT LAW.
@@ -8,7 +8,6 @@
 
 # OS Module
 import os.path
-import random
 import socket
 import subprocess
 import hashlib
@@ -384,25 +383,32 @@ def rekey_container_password(
         file_offset = file_entry["offset"]
         file_length = file_entry["length"]
         
-        # Decrypt with old master key and re-encrypt with new master key
+        # Decrypt with old master key and re-encrypt with new master key.
+        # Wichtig: Falls eine Datei nicht neu verschlüsselt werden kann, wird der
+        # komplette Vorgang abgebrochen (Exception), BEVOR irgendetwas geschrieben
+        # wird. Andernfalls würde der neue Header/Meta einen neuen Key verwenden,
+        # während der Alt-Blob mit dem alten Key verschlüsselt bliebe und die
+        # Datei dauerhaft unlesbar würde.
+        tmp_decrypt_path = None
+        tmp_encrypt_path = None
         try:
             from decrypt import decrypt_blob_range
             from encrypt import encrypt_file_to_blob
             import tempfile as tf
-            
+
             # Create temporary file for decrypted data
             with tf.NamedTemporaryFile(delete=False) as tmp_decrypt:
                 tmp_decrypt_path = tmp_decrypt.name
-            
+
             # Decrypt blob to temp file
             with open(container_path, "rb") as source:
                 source.seek(file_offset)
                 decrypt_blob_range(source, tmp_decrypt_path, file_length, current_master_key, file_name)
-            
+
             # Re-encrypt with new master key
             with tf.NamedTemporaryFile(delete=False) as tmp_encrypt:
                 tmp_encrypt_path = tmp_encrypt.name
-            
+
             with open(tmp_encrypt_path, "wb") as tmp_encrypt_file:
                 encrypt_file_to_blob(
                     tmp_decrypt_path,
@@ -410,11 +416,11 @@ def rekey_container_password(
                     new_master,
                     filename=file_name,
                 )
-            
+
             # Read re-encrypted blob
             with open(tmp_encrypt_path, "rb") as enc_file:
                 reencrypted_blob = enc_file.read()
-            
+
             # Store re-encrypted blob in file entry for later writing
             file_entry_with_blob = {
                 "name": file_name,
@@ -424,32 +430,26 @@ def rekey_container_password(
                 "blob": reencrypted_blob
             }
             new_files.append(file_entry_with_blob)
-            
+
             current_offset += len(reencrypted_blob)
-            
-            # Cleanup temp files
-            try:
-                os.remove(tmp_decrypt_path)
-                os.remove(tmp_encrypt_path)
-            except:
-                pass
-                
+
         except Exception as e:
-            # If re-encryption fails, keep original blob
-            print(f"[WARN] Re-encryption failed for {file_name}: {e}")
-            # Read original blob
-            with open(container_path, "rb") as source:
-                source.seek(file_offset)
-                original_blob = source.read(file_length)
-            
-            new_files.append({
-                "name": file_name,
-                "offset": current_offset,
-                "length": file_length,
-                "size": file_entry.get("size", 0),
-                "blob": original_blob
-            })
-            current_offset += file_length
+            raise RuntimeError(
+                f"Passwortwechsel fehlgeschlagen bei '{file_name}': {e}. "
+                "Der Tresor bleibt unverändert."
+            ) from e
+        finally:
+            # Temporäre Dateien in jedem Fall aufräumen
+            if tmp_decrypt_path:
+                try:
+                    os.remove(tmp_decrypt_path)
+                except Exception:
+                    pass
+            if tmp_encrypt_path:
+                try:
+                    os.remove(tmp_encrypt_path)
+                except Exception:
+                    pass
     
     # Create clean metadata without blob fields for JSON serialization
     new_meta_files = []
@@ -1019,8 +1019,9 @@ def read_header(fh):
         write_header(fh, FLAG_DEVICE | FLAG_KEYFILE, salt)
         fh.flush()
         fh.seek(0)  # wieder an Anfang
+        data = fh.read(HEADER_LEN)  # reparierten Header neu einlesen
 
-    # Header vollständig → auslesen
+    # Header vollständig → auslesen (data wurde nach einer Reparatur neu gelesen)
     magic, ver, flags, salt, _ = struct.unpack(HEADER_FMT, data)
     if magic != MAGIC:
         print("[WARN] Ungültige Magic Bytes. Header wird ersetzt.")
@@ -1029,7 +1030,8 @@ def read_header(fh):
         write_header(fh, FLAG_DEVICE | FLAG_KEYFILE, salt)
         fh.flush()
         fh.seek(0)
-        return flags, salt
+        data = fh.read(HEADER_LEN)  # neu geschriebenen Header lesen
+        _, _, flags, salt, _ = struct.unpack(HEADER_FMT, data)
 
     # Header ok
     return flags, salt
@@ -1062,147 +1064,8 @@ def make_separator(color="#2a2c32"):
 
 
 # -------------------------------------------------
-# Modernisierte Partikel
-# -------------------------------------------------
-class Particle:
-    """Einzelner Partikel für weichen Hintergrundeffekt"""
-
-    def __init__(self, x, y):
-        self.pos = QPointF(x, y)
-        self.vel = QPointF(random.uniform(-0.8, 0.8), random.uniform(-0.8, 0.8))
-        self.size = random.randint(2, 5)
-        self.color = QColor(11, 116, 255, random.randint(40, 140))
-
-    def move(self, w, h):
-        self.pos += self.vel
-        if self.pos.x() < 0 or self.pos.x() > w:
-            self.vel.setX(-self.vel.x())
-        if self.pos.y() < 0 or self.pos.y() > h:
-            self.vel.setY(-self.vel.y())
-
-
-class ParticleBackground(QWidget):
-    """Weicher, dynamischer Hintergrund mit Partikeln"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.particles = [
-            Particle(random.randint(0, 800), random.randint(0, 500)) for _ in range(65)
-        ]
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.animate)
-        self.timer.start(30)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-
-    def animate(self):
-        for p in self.particles:
-            p.move(self.width(), self.height())
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor(10, 15, 25, 255))
-        for p in self.particles:
-            gradient = QBrush(
-                QColor(p.color.red(), p.color.green(), p.color.blue(), p.color.alpha())
-            )
-            painter.setBrush(gradient)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(p.pos, p.size, p.size)
-
-
-# -------------------------------------------------
 # Moderner Startscreen
 # -------------------------------------------------
-class FreshStartup(QWidget):
-    def __init__(self, duration=3000):
-        super().__init__()
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(800, 500)
-
-        # --- Hintergrund mit Partikeln ---
-        self.bg = ParticleBackground(self)
-        self.bg.resize(self.size())
-
-        # --- Rundes Fenster mit Shadow/Glaslook ---
-        path = QPainterPath()
-        path.addRoundedRect(0, 0, self.width(), self.height(), 25, 25)
-        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
-
-        # --- Layout ---
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.setSpacing(40)
-
-        # Logo
-        self.logo = QLabel("ANCORATE")
-        self.logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.logo.setFont(QFont("Segoe UI", 400, QFont.Weight.Bold))
-        self.logo.setStyleSheet("color: #0b74ff; letter-spacing: 4px;")
-        layout.addWidget(self.logo)
-
-        # Untertitel
-        self.subtitle = QLabel(f"ENCRYPT HOME {version_year} CITADEL")
-        self.subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.subtitle.setFont(QFont("Segoe UI", 16))
-        self.subtitle.setStyleSheet("color: rgba(255,255,255,0.7);")
-        layout.addWidget(self.subtitle)
-
-        # Fortschrittsbalken
-        self.progress = QProgressBar()
-        self.progress.setFixedWidth(420)
-        self.progress.setRange(0, 100)
-        self.progress.setStyleSheet("""
-            QProgressBar {
-                background-color: rgba(255,255,255,0.08);
-                border: 1px solid rgba(11,116,255,0.6);
-                border-radius: 10px;
-                text-align: center;
-                color: #cce0ff;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #0b74ff,
-                    stop:1 #38b6ff
-                );
-                border-radius: 10px;
-            }
-        """)
-        layout.addWidget(self.progress)
-
-        # --- Fortschritt Animation ---
-        self.progress_value = 0
-        self.duration = duration
-        self.progress_timer = QTimer(self)
-        self.progress_timer.timeout.connect(self.update_progress)
-        self.progress_timer.start(duration // 100)
-
-        # --- sanftes Einblenden ---
-        self.fade_in = QPropertyAnimation(self, b"windowOpacity")
-        self.fade_in.setDuration(1000)
-        self.fade_in.setStartValue(0)
-        self.fade_in.setEndValue(1)
-        self.fade_in.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self.fade_in.start()
-
-    def update_progress(self):
-        self.progress_value += 1
-        self.progress.setValue(self.progress_value)
-        if self.progress_value >= 100:
-            self.progress_timer.stop()
-            self.fade_out = QPropertyAnimation(self, b"windowOpacity")
-            self.fade_out.setDuration(100000)
-            self.fade_out.setStartValue(1)
-            self.fade_out.setEndValue(0)
-            self.fade_out.finished.connect(self.close)
-            self.fade_out.start()
-
-
 class AddWorker(QObject):
     progress = pyqtSignal(int)
     finished = pyqtSignal(list)
@@ -1266,51 +1129,69 @@ class AddWorker(QObject):
                 f.truncate(meta_pos)
                 f.seek(0, os.SEEK_END)
 
-                total = len(self.files)
-                for idx, filepath in enumerate(self.files, start=1):
-                    if self.stop_event and self.stop_event.is_set():
-                        raise RuntimeError("Vorgang abgebrochen")
+                try:
+                    total = len(self.files)
+                    added_paths = []
+                    for idx, filepath in enumerate(self.files, start=1):
+                        if self.stop_event and self.stop_event.is_set():
+                            raise RuntimeError("Vorgang abgebrochen")
 
-                    if not os.path.isfile(filepath):
-                        continue
+                        if not os.path.isfile(filepath):
+                            continue
 
-                    offset = f.tell()
-                    name = os.path.basename(filepath)
-                    size = os.path.getsize(filepath)
+                        offset = f.tell()
+                        name = os.path.basename(filepath)
+                        size = os.path.getsize(filepath)
 
-                    # Progress-Callback
-                    def cb(progress_value):
-                        base = int(((idx - 1) / max(1, total)) * 100)
-                        self.progress.emit(
-                            min(100, base + int(progress_value / max(1, total)))
+                        # Progress-Callback
+                        def cb(progress_value):
+                            base = int(((idx - 1) / max(1, total)) * 100)
+                            self.progress.emit(
+                                min(100, base + int(progress_value / max(1, total)))
+                            )
+
+                        # Datei verschlüsseln und anhängen
+                        encrypt_file_to_blob(
+                            filepath, f, v2, progress_cb=cb, stop_event=self.stop_event
                         )
 
-                    # Datei verschlüsseln und anhängen
-                    encrypt_file_to_blob(
-                        filepath, f, v2, progress_cb=cb, stop_event=self.stop_event
-                    )
+                        newpos = f.tell()
+                        blob_len = newpos - offset
+                        meta["files"].append(
+                            {
+                                "name": name,
+                                "size": size,
+                                "offset": offset,
+                                "length": blob_len,
+                            }
+                        )
+                        added.append(name)
+                        added_paths.append(filepath)
 
-                    newpos = f.tell()
-                    blob_len = newpos - offset
-                    meta["files"].append(
-                        {
-                            "name": name,
-                            "size": size,
-                            "offset": offset,
-                            "length": blob_len,
-                        }
-                    )
-                    added.append(name)
+                    # Meta verschlüsseln und ans Ende schreiben
+                    meta_enc = encrypt_meta(meta, v2)
+                    f.write(meta_enc)
+                    f.write(struct.pack("<Q", len(meta_enc)))
 
-                # Meta verschlüsseln und ans Ende schreiben
-                meta_enc = encrypt_meta(meta, v2)
-                f.write(meta_enc)
-                f.write(struct.pack("<Q", len(meta_enc)))
+                except Exception:
+                    # Wen etwas schief läuft (z.B. Abbruch, Fehler), die alten
+                    # Metadaten wiederherstellen, damit der Tresor lesbar bleibt.
+                    try:
+                        f.truncate(meta_pos)
+                        f.seek(0, os.SEEK_END)
+                        f.write(meta_blob)
+                        f.write(meta_len_bytes)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    except Exception:
+                        pass
+                    raise
 
  # Einstellungen neu laden für aktuellen del_source_added Status
             current_settings = load_settings()
             if current_settings.get("del_source_added"):
-                for file in self.files:
+                # Nur die tatsächlich erfolgreich verschlüsselten Quelldateien löschen.
+                for file in added_paths:
                     try:
                         os.remove(file)
                     except Exception:
@@ -1845,10 +1726,8 @@ class App(QWidget):
         self.settings_dialog = SettingsDialog
         self._settings_dialog = None
         self.update_worker = None
-        self.intelligence_manager = None
+        self.update_news_shown = False
         self.data = load_settings()
-        if self.data.get("encrypt_intelligence_enabled", False):
-            self._start_intelligence_init()
         # Vorschau-Cache (RAM): LRU-Cache für bereits entschlüsselte Bytes
         self._preview_cache: OrderedDict[str, tuple[bytes, object]] = OrderedDict()
         self._preview_cache_bytes: int = 0
@@ -2048,14 +1927,6 @@ class App(QWidget):
         for a in actions_edit:
             edit_menu.addAction(a)
 
-        # EncryptIntelligence-Menü (nur wenn aktiviert)
-        if self.data.get("encrypt_intelligence_enabled", False):
-            intelligence_menu = QMenu("EncryptIntelligence BETA", self)
-            open_intelligence_action = QAction("EncryptIntelligence BETA öffnen", self)
-            open_intelligence_action.triggered.connect(self.show_intelligence_dialog)
-            intelligence_menu.addAction(open_intelligence_action)
-            menubar.addMenu(intelligence_menu)
-
         # Hilfe-Menü
         help_menu = QMenu("Hilfe", self)
         about_action = QAction(f"Über {edition} {version_year}", self)
@@ -2205,61 +2076,6 @@ class App(QWidget):
         self._settings_dialog.raise_()
         self._settings_dialog.activateWindow()
 
-    def _start_intelligence_init(self):
-        if self.intelligence_manager is not None:
-            return
-        try:
-            from intelligence.core import EncryptIntelligenceManager, EncryptIntelligenceConfig
-            tier = self.data.get("encrypt_intelligence_model_tier", "EncryptIntelligence Light")
-            config = EncryptIntelligenceConfig(model_tier=tier)
-            self.intelligence_manager = EncryptIntelligenceManager(config)
-        except Exception as e:
-            print(f"[INTELLIGENCE] Init-Fehler: {e}")
-
-    def _reset_intelligence_init(self):
-        self.intelligence_manager = None
-
-    def _get_intelligence_manager(self, block=True):
-        if self.intelligence_manager is None:
-            self._start_intelligence_init()
-        return self.intelligence_manager
-
-    def show_intelligence_dialog(self):
-        container_path = getattr(self, "container_path", None)
-        if container_path:
-            from intelligence.core import EncryptIntelligenceManager, EncryptIntelligenceConfig
-            tier = self.data.get("encrypt_intelligence_model_tier", "EncryptIntelligence Light")
-            vault_dir = Path(container_path).parent / (Path(container_path).stem + ".ei")
-            try:
-                vault_dir.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
-            manager = EncryptIntelligenceManager(
-                EncryptIntelligenceConfig(model_tier=tier, storage_dir=str(vault_dir))
-            )
-        else:
-            manager = self._get_intelligence_manager()
-
-        if manager is None:
-            QMessageBox.critical(
-                self,
-                "EncryptIntelligence BETA",
-                "EncryptIntelligence BETA konnte nicht geladen werden.",
-            )
-            return
-
-        if not hasattr(self, "_intelligence_dialog") or self._intelligence_dialog is None:
-            from intelligence.ui import EncryptIntelligenceDialog
-            self._intelligence_dialog = EncryptIntelligenceDialog(
-                self, manager=manager,
-            )
-        else:
-            self._intelligence_dialog.manager = manager
-
-        self._intelligence_dialog.show()
-        self._intelligence_dialog.raise_()
-        self._intelligence_dialog.activateWindow()
-
     def get_pwd_dialog(self):
         print("Passwortabfrage")
         pwd, cancelled = get_password_with_requirements(self, "Passwort eingeben")
@@ -2350,28 +2166,7 @@ class App(QWidget):
     def apply_behavior_settings(self, settings):
         """Verhaltens-Einstellungen aktualisieren"""
         try:
-            old_enabled = self.data.get("encrypt_intelligence_enabled", False)
             self.data = settings
-            new_enabled = self.data.get("encrypt_intelligence_enabled", False)
-            
-            if new_enabled and not old_enabled:
-                if self.intelligence_manager is None:
-                    self._start_intelligence_init()
-            elif not new_enabled and old_enabled:
-                if not hasattr(self, "_intelligence_dialog") or self._intelligence_dialog is None:
-                    self._reset_intelligence_init()
-            
-            if (
-                hasattr(self, "_intelligence_dialog")
-                and self._intelligence_dialog is not None
-                and self.intelligence_manager is not None
-            ):
-                self._intelligence_dialog.manager = self.intelligence_manager
-            
-            # Menüleiste neu aufbauen wenn sich EncryptIntelligence-Status geändert hat
-            if old_enabled != new_enabled:
-                self._rebuild_menubar()
-            
             print("[SETTINGS] Verhaltens-Einstellungen aktualisiert")
         except Exception as e:
             print(f"[SETTINGS] Verhaltens-Fehler: {e}")
@@ -2569,6 +2364,8 @@ class App(QWidget):
         pwd = self.pwd
         while not pwd:
             pwd = self.get_pwd_dialog()
+            if not pwd:
+                return
         if not pwd:
             QMessageBox.warning(self, "Passwort fehlt", "Kein Passwort bereitgestellt.")
             return
@@ -2713,6 +2510,8 @@ Mögliche Ursache
         pwd = self.pwd
         while not pwd:
             pwd = self.get_pwd_dialog()
+            if not pwd:
+                return
 
             # Container-Daten erzeugen
         salt = secrets.token_bytes(SALT_LEN)
@@ -2759,12 +2558,12 @@ Mögliche Ursache
 
         # Warnung verschärfen, wenn Vaporizer gewählt ist
         warning_text = f"Möchtest du den Tresor wirklich mit '{method}' vernichten?\n\n"
-        if "ANCORATE Vaporizer 1 (100x)" in method:
+        if "Vaporizer 1" in method:
             warning_text += "ACHTUNG: ANCORATE Vaporizer 1 mit 100 Durchgängen gewählt. Dies wird lange dauern (1+ min)!"
-        elif "ANCORATE Furnace Max (200x" in method:
+        elif "Furnace Max" in method:
             warning_text += "ACHTUNG: ANCORATE Furnace Max mit 200 Durchgängen gewählt. Der Löschvorgang wird mindestens 5 min dauern!"
 
-        elif "ANCORATE Shatterer Ultra (300x)" in method:
+        elif "Shatterer Ultra" in method:
             warning_text += "ACHTUNG: ANCORATE Shatterer Ultra mit 300 Durchgängen gewählt. Der Löschvorgang wird sehr lange dauern (10+ min)!\nEr kann bei HDDs (Hard Disk Drives) zu dauerhaften Schäden an der Disk führen!"
         else:
             warning_text += (
@@ -3226,11 +3025,11 @@ Mögliche Ursache
 
         # Durchgänge festlegen
 
-        if "ANCORATE Shatterer Ultra (300x)" in method:
+        if "Shatterer Ultra" in method:
             passes = 300
-        elif "ANCORATE Furnace Max (200x, grosse Dateien)" in method:
+        elif "Furnace Max" in method:
             passes = 200
-        elif "ANCORATE Vaporizer 1 (100x)" in method:
+        elif "Vaporizer 1" in method:
             passes = 100
         elif "Gutmann (35x)" in method:
             passes = 35
@@ -3458,23 +3257,6 @@ Mögliche Ursache
         if not query:
             self.refresh_list()
             return
-
-        if self.data.get("encrypt_intelligence_enabled", False) and self.data.get(
-            "encrypt_intelligence_search_integration", False
-        ):
-            manager = self._get_intelligence_manager(block=False)
-            if manager is not None:
-                try:
-                    manager.reload_storage()
-                except Exception:
-                    pass
-                results = manager.search_documents(query)
-                if results:
-                    self.refresh_list(searching=True, intelligence_results=results)
-                    self.status.setText(
-                        f"EncryptIntelligence: {len(results)} relevante Dokument(e) gefunden."
-                    )
-                    return
 
         self.refresh_list(True)
     
@@ -4212,54 +3994,18 @@ def main():
     app.setStyle(QStyleFactory.create("Fusion"))
     app.setStyleSheet(APP_STYLE)
 
-    # Splash
-    splash = FreshStartup()
-    splash.show()
-    print("SPLASH SHOWN", flush=True)
+    # =========================
+    # Device registration check
+    # =========================
+    device_key = load_device_key()
 
-    def after_splash():
-        print("SPLASH DONE", flush=True)
-        splash.close()
+    if not device_key:
+        QMessageBox.critical(None, "ANCORATE", "Device fingerprint generation failed.\nPlease check your system configuration.")
+        sys.exit(1)
 
-        # =========================
-        # Device registration check
-        # =========================
-        device_key = load_device_key()
-
-        if not device_key:
-            QMessageBox.critical(None, "ANCORATE", "Device fingerprint generation failed.\nPlease check your system configuration.")
-            sys.exit(1)
-
-        # Show welcome dialog for new devices
-        if not is_device_registered():
-            welcome = WelcomeOverlay()
-            welcome.exec()
-            
-            # Show TOS only for new devices
-            tos = TermsOfServiceDialog()
-            if tos.exec() != QDialog.DialogCode.Accepted:
-                sys.exit(0)
-
-        # =========================
-        # Login with setup relaunch handling
-        # =========================
-        while True:
-            login = LoginDialog()
-            result = login.exec()
-            
-            if result == QDialog.DialogCode.Accepted:
-                break  # Login successful, proceed
-            elif hasattr(login, 'relaunch_setup') and login.relaunch_setup:
-                # Setup was requested, show setup dialog
-                setup = SetupDialog()
-                if setup.exec() != QDialog.DialogCode.Accepted:
-                    sys.exit(0)
-                # Continue loop to show login again
-            else:
-                sys.exit(0)  # User cancelled login
-
-        print("LOGIN OK", flush=True)
-
+    # No new setup required: device already registered, auto-login and skip
+    # the startup animation, welcome, TOS and login dialogs.
+    if is_device_registered():
         window = App()
         window.show()
         print("MAIN WINDOW SHOWN", flush=True)
@@ -4270,8 +4016,45 @@ def main():
         # Delayed start of keep_search thread to ensure GUI is fully initialized
         QTimer.singleShot(2000, lambda: threading.Thread(target=window.keep_search, daemon=True).start())
 
-    # Splash sichtbar lassen
-    QTimer.singleShot(2500, after_splash)
+        print("ENTER EVENT LOOP", flush=True)
+        sys.exit(app.exec())
+
+    # New device: show welcome dialog
+    welcome = WelcomeOverlay()
+    welcome.exec()
+
+    # Show TOS only for new devices
+    tos = TermsOfServiceDialog()
+    if tos.exec() != QDialog.DialogCode.Accepted:
+        sys.exit(0)
+
+    # Login with setup relaunch handling
+    while True:
+        login = LoginDialog()
+        result = login.exec()
+
+        if result == QDialog.DialogCode.Accepted:
+            break  # Login successful, proceed
+        elif hasattr(login, 'relaunch_setup') and login.relaunch_setup:
+            # Setup was requested, show setup dialog
+            setup = SetupDialog()
+            if setup.exec() != QDialog.DialogCode.Accepted:
+                sys.exit(0)
+            # Continue loop to show login again
+        else:
+            sys.exit(0)  # User cancelled login
+
+    print("LOGIN OK", flush=True)
+
+    window = App()
+    window.show()
+    print("MAIN WINDOW SHOWN", flush=True)
+
+    # Background update check at startup
+    QTimer.singleShot(1000, window.start_update_check)
+
+    # Delayed start of keep_search thread to ensure GUI is fully initialized
+    QTimer.singleShot(2000, lambda: threading.Thread(target=window.keep_search, daemon=True).start())
 
     print("ENTER EVENT LOOP", flush=True)
     sys.exit(app.exec())

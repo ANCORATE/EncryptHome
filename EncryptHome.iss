@@ -1,5 +1,4 @@
 ; Script to generate an ANCORATE EncryptHome Setup.
-; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "ANCORATE EncryptHome"
 #define MyAppVersion "26.2"

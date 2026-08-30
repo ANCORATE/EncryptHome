@@ -16,12 +16,12 @@ Complete guide for setting up and developing EncryptHome.
 ### Required Software
 
 #### Python
-- **Version**: Python 3.8 or higher
-- **Recommended**: Python 3.10+
+- **Version**: Python 3.10 or higher (uses PEP 604 union types, e.g. `str | None`)
+- **Recommended**: Python 3.13+ (the app is distributed with a modified Python 3.13 PyInstaller build)
 - **Download**: [python.org](https://python.org)
 
 #### System Requirements
-- **RAM**: 4 GB minimum, 8 GB recommended
+- **RAM**: 1 GB minimum, 8 GB recommended
 - **Disk**: 100 MB free space for development
 - **OS**: Windows 10+, Ubuntu 18.04+, macOS 10.15+
 
@@ -119,8 +119,9 @@ EncryptHome/
 │   ├── settings.py         # Settings management
 │   ├── header_utils.py     # Header utilities
 │   ├── checksum_check.py   # Integrity verification
-│   ├── sos_delete.py       # Secure deletion
-│   └── updater.py          # Update mechanism
+│   ├── sos_delete.py       # Emergency vault scanner/wiper
+│   ├── updater.py          # Update mechanism
+│   └── themes/             # Qt stylesheet themes
 ├── docs/                   # Documentation
 ├── AGENTS.md              # Development guidelines
 └── README.md              # Project readme
@@ -146,73 +147,36 @@ For creating distributable executables, use PyInstaller:
 pip install pyinstaller
 ```
 
-#### 2. Create Spec File
+#### 2. Use the Project Spec File
 
-Create `EncryptHome.spec`:
+The repository ships a ready-made spec file (`ANCORATE_EncryptHome_26.2_Build_0009.spec`). It bundles the
+application together with `utilities/`, `docs/`, `TOS.txt` and `README.md`, and declares the
+required hidden imports (PyQt6, cryptography, argon2, requests, sqlite3, fitz):
 
 ```python
-# -*- mode: python ; coding: utf-8 -*-
-
-block_cipher = None
-
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('utilities', 'utilities'),
-        ('licenses.dat', '.'),
-    ],
-    hiddenimports=[
-        'PyQt6',
-        'argon2',
-        'cryptography',
-        'requests',
-    ],
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
+    datas=[('utilities', 'utilities'), ('docs', 'docs'),
+           ('TOS.txt', '.'), ('README.md', '.')],
+    hiddenimports=['PyQt6', 'PyQt6.QtCore', 'PyQt6.QtWidgets', 'PyQt6.QtGui', 'cryptography',
+                   'argon2', 'requests', 'sqlite3', 'fitz'],
+    ...
 )
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
 exe = EXE(
     pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name='EncryptHome',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,  # Set to True for debugging
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon='utilities/icon.ico'  # Platform-specific
+    a.scripts, a.binaries, a.zipfiles, a.datas, [],
+    name='ANCORATE_EncryptHome_26.2_Build_0009',
+    console=False,
+    icon=['utilities\\icon.ico'],
 )
 ```
 
 #### 3. Build Executable
 
 ```bash
-# Single file executable
-pyinstaller --onefile --windowed EncryptHome.spec
-
-# Directory distribution
-pyinstaller --onedir --windowed EncryptHome.spec
+pyinstaller ANCORATE_EncryptHome_26.2_Build_0009.spec
 ```
 
 #### 4. Platform-Specific Considerations

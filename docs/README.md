@@ -49,7 +49,7 @@ EncryptHome implements a vault-based encryption system with the following key fe
 ## Getting Started
 
 ### Prerequisites
-- Python 3.8 or higher
+- Python 3.10 or higher
 - PyQt6
 - argon2-cffi
 - cryptography
@@ -81,20 +81,24 @@ See [Development Guide](DEVELOPMENT.md) for detailed setup instructions.
 ### Utilities
 - **utilities/header_utils.py** - Container header validation and repair
 - **utilities/checksum_check.py** - File integrity verification
-- **utilities/sos_delete.py** - Secure file deletion
+- **utilities/sos_delete.py** - Emergency vault scanner/wiper (finds and deletes .salt vaults)
 - **utilities/updater.py** - Application update mechanism
 
 ## Security Architecture
 
 ### Encryption Stack
 ```
-Password
+Password + Project Pepper
     ↓
 Argon2id (t=3, m=128MB, p=4)
     ↓
-Master Key (32 bytes)
+Password-derived key (32 bytes)
     ↓
-HKDF-SHA256 (per-file)
+Combine with Device Key hash (device-bound only)
+    ↓
+HKDF-SHA256 → Master Key (32 bytes)
+    ↓
+HKDF-SHA256 (per-file, salt=file nonce, info=filename)
     ↓
 File Subkey (32 bytes)
     ↓

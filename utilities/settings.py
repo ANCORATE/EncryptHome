@@ -80,9 +80,6 @@ DEFAULT_SETTINGS = {
     # --- NEU: System & Verhalten ---
     "confirm_exit": True,
     "del_source_added": False,
-    "encrypt_intelligence_enabled": False,
-    "encrypt_intelligence_search_integration": False,
-    "encrypt_intelligence_model_path": "EncryptIntelligence-v1.gguf",
     # --- NEU: Sicherheit & Pfade ---
     "deletion_method": "Standard",  # Standard, DoD, Gutmann
 }
@@ -165,7 +162,6 @@ class SettingsDialog(QDialog):
             "Allgemein",
             "Kurzbefehle",
             "Design",
-            "EncryptIntelligence BETA",
             "Updates",
         ])
         self.category_list.setFixedWidth(180)
@@ -191,7 +187,6 @@ class SettingsDialog(QDialog):
         self.create_general_tab()
         self.create_shortcuts_tab()
         self.create_design_tab()
-        self.create_intelligence_tab()
         self.create_updates_tab()  # Neuer separater Tab
 
         right_layout.addWidget(self.stack, 1)  # 1 = Stretch factor
@@ -442,7 +437,7 @@ class SettingsDialog(QDialog):
                 "Quantum",
                 "Precision-light",
                 "Precision-dark",
-                "Hacker's-dark",
+                "Hackers-dark",
                 "Cyber-blue",
             ]
         )
@@ -453,276 +448,6 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         widget.setLayout(layout)
         self.stack.addWidget(widget)
-
-    def create_intelligence_tab(self):
-        # Scroll-Area, damit Inhalt nie abgeschnitten wird
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
-
-        title = QLabel("EncryptIntelligence BETA")
-        title.setStyleSheet("font-weight: bold; font-size: 18px; color: #ffffff;")
-        layout.addWidget(title)
-
-        description = QLabel(
-            "Sie sind dazu eingeladen, EncryptIntelligence BETA zu testen. Bitte beachten Sie, dass dies eine Beta-Version ist und noch nicht vollständig getestet wurde. Wir freuen uns über Ihr Feedback!"
-        )
-
-        description.setWordWrap(True)
-        layout.addWidget(description)
-
-        layout.addSpacing(8)
-
-        # --- Enable/Disable ---
-        self.cb_intelligence_enabled = QCheckBox("EncryptIntelligence BETA aktivieren")
-        self.cb_intelligence_enabled.setChecked(
-            self.data.get("encrypt_intelligence_enabled", False)
-        )
-        self.cb_intelligence_enabled.stateChanged.connect(
-            self._on_intelligence_enabled_changed
-        )
-        layout.addWidget(self.cb_intelligence_enabled)
-
-        # --- Search Integration ---
-        self.cb_search_integration = QCheckBox(
-            "Normale Suche um lokale Dokumenteninhalte erweitern"
-        )
-        self.cb_search_integration.setChecked(
-            self.data.get("encrypt_intelligence_search_integration", False)
-        )
-        self.cb_search_integration.stateChanged.connect(
-            self._save_intelligence_settings
-        )
-        self.cb_search_integration.setToolTip(
-            "Wenn aktiviert, werden Suchanfragen auch gegen den lokalen EncryptIntelligence BETA-Index ausgeführt."
-        )
-        layout.addWidget(self.cb_search_integration)
-
-        layout.addSpacing(8)
-
-        # --- Model Selection ---
-        self.model_group = QGroupBox("Modell auswählen und herunterladen (BETA)")
-        self.model_group.setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; margin-top: 12px; } QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }")
-        model_group_layout = QVBoxLayout()
-        model_group_layout.setContentsMargins(16, 20, 16, 16)
-        model_group_layout.setSpacing(10)
-
-        self.tier_radios = []
-        self.tier_labels = []
-        from intelligence.core import AVAILABLE_TIERS, get_model_info, resolve_model_path
-        current_tier = self.data.get("encrypt_intelligence_model_tier", AVAILABLE_TIERS[0])
-        for idx, tier in enumerate(AVAILABLE_TIERS):
-            info = get_model_info(tier)
-
-            tier_box = QWidget()
-            tier_layout = QVBoxLayout(tier_box)
-            tier_layout.setContentsMargins(0, 0, 0, 0)
-            tier_layout.setSpacing(2)
-
-            radio = QRadioButton(tier)
-            radio.setChecked(tier == current_tier)
-            radio.toggled.connect(self._save_intelligence_settings)
-            self.tier_radios.append(radio)
-            tier_layout.addWidget(radio)
-
-            desc_lbl = QLabel(info["description"])
-            desc_lbl.setWordWrap(True)
-            desc_lbl.setStyleSheet("color: #c0c0c0; font-size: 12px; padding-left: 24px;")
-            tier_layout.addWidget(desc_lbl)
-
-            status_lbl = QLabel()
-            status_lbl.setStyleSheet("font-size: 12px; padding-left: 24px;")
-            tier_layout.addWidget(status_lbl)
-            self.tier_labels.append(status_lbl)
-
-            if idx < len(AVAILABLE_TIERS) - 1:
-                sep = QFrame()
-                sep.setFrameShape(QFrame.Shape.HLine)
-                sep.setStyleSheet("color: #333;")
-                tier_layout.addWidget(sep)
-
-            model_group_layout.addWidget(tier_box)
-
-        self._update_tier_status_labels()
-
-        model_group_layout.addSpacing(6)
-
-        dl_row = QWidget()
-        dl_row_layout = QHBoxLayout(dl_row)
-        dl_row_layout.setContentsMargins(0, 0, 0, 0)
-        dl_row_layout.setSpacing(8)
-
-        self.dl_progress = QProgressBar()
-        self.dl_progress.setVisible(False)
-        self.dl_progress.setFixedHeight(24)
-        dl_row_layout.addWidget(self.dl_progress, 1)
-
-        self.dl_status_label = QLabel("")
-        self.dl_status_label.setStyleSheet("color: #c0c0c0;")
-        dl_row_layout.addWidget(self.dl_status_label)
-
-        model_group_layout.addWidget(dl_row)
-
-        self.dl_button = QPushButton("Herunterladen")
-        self.dl_button.setFixedHeight(32)
-        self.dl_button.clicked.connect(self._download_selected_model)
-        model_group_layout.addWidget(self.dl_button)
-
-        self.model_group.setLayout(model_group_layout)
-        layout.addWidget(self.model_group)
-        self.model_group.setVisible(self.cb_intelligence_enabled.isChecked())
-
-        layout.addSpacing(12)
-
-        # --- Status ---
-        status_title = QLabel("Status")
-        status_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #ffffff;")
-        layout.addWidget(status_title)
-
-        status_group = QGroupBox()
-        status_group_layout = QVBoxLayout()
-        status_group_layout.setContentsMargins(12, 12, 12, 12)
-        status_group_layout.setSpacing(6)
-
-        self._status_labels = {}
-        for key, label in [
-            ("llm", "LLM-Backend"),
-            ("search", "Keyword-Suche"),
-            ("pdf", "PDF-Unterstützung"),
-            ("ocr", "OCR (Bilder)"),
-        ]:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label + ":"))
-            lbl = QLabel("?")
-            lbl.setStyleSheet("color: #c0c0c0;")
-            self._status_labels[key] = lbl
-            row.addWidget(lbl)
-            row.addStretch()
-            status_group_layout.addLayout(row)
-
-        status_group.setLayout(status_group_layout)
-        layout.addWidget(status_group)
-
-        self._refresh_status_btn = QPushButton("Status aktualisieren")
-        self._refresh_status_btn.setFixedHeight(32)
-        self._refresh_status_btn.clicked.connect(self._refresh_intelligence_status)
-        layout.addWidget(self._refresh_status_btn)
-
-        layout.addSpacing(8)
-
-        hint = QLabel(
-            "Hinweis: Die Suche verwendet verschlüsselte Dokumente aus deinem aktuellen Tresor."
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: #c0c0c0; font-size: 12px;")
-        layout.addWidget(hint)
-
-        layout.addStretch()
-
-        scroll.setWidget(widget)
-        self.stack.addWidget(scroll)
-
-    def _on_intelligence_enabled_changed(self):
-        enabled = self.cb_intelligence_enabled.isChecked()
-        self.model_group.setVisible(enabled)
-        self._save_intelligence_settings()
-        if enabled:
-            self._refresh_intelligence_status()
-
-    def _update_tier_status_labels(self):
-        from intelligence.core import resolve_model_path
-        for i, radio in enumerate(self.tier_radios):
-            path = resolve_model_path(radio.text())
-            exists = path and path.exists()
-            if exists:
-                size_mb = path.stat().st_size / (1024 * 1024)
-                self.tier_labels[i].setText(f"✅ {size_mb:.0f} MB – heruntergeladen")
-                self.tier_labels[i].setStyleSheet("color: #4caf50; font-size: 12px; padding-left: 20px;")
-            else:
-                info_size = self._get_tier_info(radio.text()).get("filesize", 0)
-                size_mb = info_size / (1024 * 1024)
-                self.tier_labels[i].setText(f"↻ {size_mb:.0f} MB – noch nicht heruntergeladen")
-                self.tier_labels[i].setStyleSheet("color: #ff9800; font-size: 12px; padding-left: 20px;")
-
-    def _get_tier_info(self, tier):
-        from intelligence.core import get_model_info
-        return get_model_info(tier) or {}
-
-    def _get_selected_tier(self):
-        for radio in self.tier_radios:
-            if radio.isChecked():
-                return radio.text()
-        return self.tier_radios[0].text() if self.tier_radios else ""
-
-    def _download_selected_model(self):
-        tier = self._get_selected_tier()
-        if not tier:
-            return
-
-        self.dl_button.setEnabled(False)
-        self.dl_progress.setVisible(True)
-        self.dl_progress.setValue(0)
-        self.dl_status_label.setText("Starte Download...")
-
-        from intelligence.core import download_model
-
-        class _DlSignals(QObject):
-            done = pyqtSignal()
-            error = pyqtSignal(str)
-            progress = pyqtSignal(int, int)
-
-        _sig = _DlSignals()
-        _sig.done.connect(lambda: self.dl_status_label.setText("✅ Download abgeschlossen"))
-        _sig.done.connect(self._update_tier_status_labels)
-        _sig.done.connect(self._refresh_intelligence_status)
-        _sig.done.connect(lambda: self.dl_button.setEnabled(True))
-        _sig.error.connect(lambda e: self.dl_status_label.setText(f"❌ Fehler: {e}"))
-        _sig.error.connect(lambda: self.dl_button.setEnabled(True))
-        _sig.progress.connect(lambda c, t: self.dl_progress.setValue(int(c * 100 / t)) if t > 0 else None)
-        _sig.progress.connect(lambda c, t: self.dl_status_label.setText(
-            f"{c / (1024*1024):.0f} / {t / (1024*1024):.0f} MB"
-        ) if t > 0 else None)
-
-        def _run():
-            try:
-                download_model(tier, progress_callback=lambda c, t: _sig.progress.emit(c, t))
-                _sig.done.emit()
-            except Exception as e:
-                _sig.error.emit(str(e))
-
-        import threading
-        threading.Thread(target=_run, daemon=True).start()
-
-    def _refresh_intelligence_status(self):
-        try:
-            from intelligence.core import EncryptIntelligenceManager, EncryptIntelligenceConfig
-            tier = self.data.get("encrypt_intelligence_model_tier", "EncryptIntelligence Light")
-            config = EncryptIntelligenceConfig(model_tier=tier)
-            mgr = EncryptIntelligenceManager(config)
-            caps = mgr.capability_status()
-        except Exception as e:
-            for lbl in self._status_labels.values():
-                lbl.setText("Fehler")
-                lbl.setStyleSheet("color: #ff4444;")
-            self._status_labels["llm"].setText(str(e)[:80])
-            return
-        self._status_labels["llm"].setText(
-            "✅ " + caps["llm_backend"] if caps["llm"] else "❌ nicht verfügbar"
-        )
-        self._status_labels["llm"].setStyleSheet(
-            "color: #4caf50;" if caps["llm"] else "color: #ff9800;"
-        )
-        self._status_labels["search"].setText("✅ immer verfügbar")
-        self._status_labels["search"].setStyleSheet("color: #4caf50;")
-        self._status_labels["pdf"].setText("✅ ja" if caps["pdf"] else "❌ nein (PyMuPDF/pypdf fehlt)")
-        self._status_labels["pdf"].setStyleSheet("color: #4caf50;" if caps["pdf"] else "color: #ff4444;")
-        self._status_labels["ocr"].setText("✅ ja" if caps["ocr"] else "❌ nein (easyocr fehlt)")
-        self._status_labels["ocr"].setStyleSheet("color: #4caf50;" if caps["ocr"] else "color: #ff9800;")
 
     def create_updates_tab(self):
         """Erstellt den separierten Update-Tab."""
@@ -1058,15 +783,6 @@ class SettingsDialog(QDialog):
     def _save_theme(self, theme):
         """Speichert Theme sofort"""
         self.data["theme"] = theme
-        save_settings(self.data)
-
-    def _save_intelligence_settings(self):
-        """Speichert EncryptIntelligence-Einstellungen sofort"""
-        self.data["encrypt_intelligence_enabled"] = self.cb_intelligence_enabled.isChecked()
-        self.data["encrypt_intelligence_search_integration"] = (
-            self.cb_search_integration.isChecked()
-        )
-        self.data["encrypt_intelligence_model_tier"] = self._get_selected_tier()
         save_settings(self.data)
 
     def _save_shortcuts(self):

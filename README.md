@@ -2,9 +2,9 @@
 
 <div align="center">
 
-**Secure Device-Bound Encryption Vault**
+**Secure Device-Bound Encryption Software**
 
-Version 26.2 | EncryptHome Citadel Edition
+Version 26.2 | EncryptHome Citadel
 
 © 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin
 
@@ -30,7 +30,7 @@ EncryptHome is a security-focused desktop application designed to securely store
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.10 or higher
 - PyQt6
 - argon2-cffi
 - cryptography
@@ -95,8 +95,9 @@ EncryptHome/
 │   ├── settings.py         # Settings management
 │   ├── header_utils.py     # Header utilities
 │   ├── checksum_check.py   # Integrity verification
-│   ├── sos_delete.py       # Secure deletion
-│   └── updater.py          # Update mechanism
+│   ├── sos_delete.py       # Emergency vault scanner/wiper
+│   ├── updater.py          # Update mechanism
+│   └── themes/             # Qt stylesheet themes
 ├── docs/                   # Documentation
 │   ├── README.md
 │   ├── ARCHITECTURE.md
@@ -134,15 +135,15 @@ Settings are stored in platform-specific locations:
 
 - **Theme**: Choose between light and dark themes
 - **Keyboard Shortcuts**: Customize all shortcuts
-- **Auto-Lock**: Configure inactivity timeout
-- **Secure Deletion**: Choose deletion method (Standard/DoD/Gutmann)
+- **Auto-Lock**: Auto-lock timeout available in code
+- **Secure Deletion**: Choose deletion method (Standard/DoD/Gutmann + ANCORATE methods)
 - **Source Deletion**: Auto-delete original files after encryption
 
 ## Security Best Practices
 
 1. **Use Strong Passwords** - Minimum 12 characters with mixed types
 2. **Enable Device Binding** - For enhanced security on trusted devices
-3. **Use Secure Deletion** - DoD or Gutmann method for sensitive files
+3. **Use Secure Deletion** - Select an appropriate method for sensitive files
 4. **Regular Backups** - Keep secure backups of important vaults
 5. **Keep Updated** - Install security updates promptly
 6. **Verify Checksums** - Pay attention to integrity warnings
@@ -150,7 +151,7 @@ Settings are stored in platform-specific locations:
 
 ## Container Format
 
-EncryptHome uses a custom `.salt` container format:
+EncryptHome introduces a custom `.salt` container format:
 
 ```
 [Header 28B][File Blob 1][File Blob 2]...[Meta Length 8B][Encrypted Meta]
@@ -189,7 +190,7 @@ python main.py
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed main.py
+pyinstaller ANCORATE_EncryptHome_26.2_Build_0009.spec
 ```
 
 See [Development Guide](docs/DEVELOPMENT.md) for detailed build instructions.
@@ -197,8 +198,8 @@ See [Development Guide](docs/DEVELOPMENT.md) for detailed build instructions.
 ## Requirements
 
 ### Minimum Requirements
-- **Python**: 3.8+
-- **RAM**: 4 GB
+- **Python**: 3.10+
+- **RAM**: 1 GB
 - **Disk**: 100 MB free space
 - **OS**: Windows 10+, Ubuntu 18.04+, macOS 10.15+
 

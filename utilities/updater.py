@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import requests
 import hashlib
@@ -10,7 +10,7 @@ class EncryptHomeUpdater:
         self.current_version = current_version
         self.update_json_url = update_json_url
 
-        self.base_dir = os.path.dirname(sys.argv[0])
+        self.base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
         self.update_dir = os.path.join(self.base_dir, "update_temp")
         os.makedirs(self.update_dir, exist_ok=True)
 
@@ -27,7 +27,7 @@ class EncryptHomeUpdater:
         data = self._fetch_latest_json()
         latest_version = data["version"]
 
-        if latest_version == self.current_version:
+        if self._parse_version(latest_version) <= self._parse_version(self.current_version):
             return {"status": "NO_UPDATE", "data": data}
 
         # Update verfügbar, Setup noch nicht gestartet
@@ -65,7 +65,7 @@ class EncryptHomeUpdater:
                     1,
                 )
             except Exception:
-                subprocess.Popen([setup_path], shell=True)
+                subprocess.Popen([setup_path], shell=False)
         else:
             subprocess.Popen([setup_path])
         sys.exit(0)
@@ -79,12 +79,20 @@ class EncryptHomeUpdater:
         return r.json()
 
     def _download_file(self, url: str, dest: str):
-        with requests.get(url, stream=True) as r:
-            r.raise_for_status()
-            with open(dest, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+        try:
+            with requests.get(url, stream=True) as r:
+                r.raise_for_status()
+                with open(dest, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+        except Exception:
+            if os.path.exists(dest):
+                try:
+                    os.remove(dest)
+                except Exception:
+                    pass
+            raise
 
     def _verify_sha256(self, file_path: str, expected_hash: str) -> bool:
         h = hashlib.sha256()
@@ -92,3 +100,15 @@ class EncryptHomeUpdater:
             for chunk in iter(lambda: f.read(8192), b""):
                 h.update(chunk)
         return h.hexdigest().lower() == expected_hash.lower()
+
+    @staticmethod
+    def _parse_version(version: str) -> tuple[int, int, int]:
+        parts = []
+        for raw_part in str(version).split("."):
+            digits = "".join(ch for ch in raw_part if ch.isdigit())
+            parts.append(int(digits) if digits else 0)
+            if len(parts) == 3:
+                break
+        while len(parts) < 3:
+            parts.append(0)
+        return tuple(parts)
