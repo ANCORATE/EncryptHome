@@ -1,0 +1,11 @@
+{
+  "checked_at": 1788117448.2455869,
+  "status": "NO_UPDATE",
+  "data": {
+    "version": "26.1.1",
+    "url": "https://magicblueentity.github.io/latest/EncryptHome/ANCORATE_EncryptHome_26.1.1_0008_Setup.exe",
+    "sha256": "AC37CD2AC804CC778C1AFF84E23B42743F78471BE159D6CD854E79F5915A7D69",
+    "changelog": "Wir stellen vor: Die stabilste ANCORATE EncryptHome-Version bis jetzt.\n- Preview Engine f\u00fcr Videos: Ansehen von Videos, Bildern und PDFs ohne Entschl\u00fcsselung\n- Verbesserte Fehlerbehandlung\n- Optimierte Leistung\n- Behebung von Sicherheitsl\u00fccken\n- Verbesserte Benutzeroberfl\u00e4che\n\nDiese Version bietet eine verbesserte Benutzererfahrung und erh\u00f6hte Sicherheit.\nWir empfehlen allen Benutzern, auf die neueste Version zu aktualisieren, um von den neuesten Funktionen und Verbesserungen zu profitieren.",
+    "size_mb": 93.1
+  }
+}

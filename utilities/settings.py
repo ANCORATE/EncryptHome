@@ -121,9 +121,12 @@ class ChangelogWorker(QThread):
 
     def run(self):
         try:
+            from updater import validate_latest_json
+
             response = requests.get(UPDATE_URL, timeout=5)
-            response.raise_for_status()
-            data = response.json()
+            if response.status_code != 200:
+                raise ConnectionError(f"HTTP {response.status_code}")
+            data = validate_latest_json(response.json())
             self.finished.emit(data)
         except Exception as e:
             self.error.emit(str(e))
@@ -137,9 +140,9 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"ANCORATE EncryptHome {VERSION_YEAR} – Einstellungen")
         self.setWindowIcon(get_app_icon())
-        self.resize(950, 700)
-        self.setMinimumSize(750, 500)  # Allow user to resize but not too small
-        self.resize(950, 700)
+        self.resize(1100, 700)
+        self.setMinimumSize(900, 500)  # Allow user to resize but not too small
+        self.resize(1100, 700)
         self.data = load_settings()
 
         # UI initialisieren
@@ -625,12 +628,7 @@ class SettingsDialog(QDialog):
             )
             return
 
-        def parse_version(v: str):
-            parts = v.split(".")
-            # auf 3 Stellen auffüllen
-            while len(parts) < 3:
-                parts.append("0")
-            return tuple(int(p) for p in parts[:3])
+        from updater import parse_version, UpdateCheckCache
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
@@ -640,9 +638,21 @@ class SettingsDialog(QDialog):
                 update_json_url=self.data.get("update_url", UPDATE_URL),
             )
 
-            result = updater.run()
-            status = result.get("status")
-            data = result.get("data", {})
+            # Smart: Innerhalb des Cooldowns das letzte Ergebnis nutzen,
+            # statt den Server erneut zu kontaktieren.
+            cache = UpdateCheckCache(updater.update_dir, cooldown_seconds=1800)
+            cached = cache.load()
+            if cache.is_fresh() and cached and cached.get("status") in (
+                "NO_UPDATE",
+                "UPDATE_AVAILABLE",
+            ):
+                status = cached["status"]
+                data = cached.get("data") or {}
+            else:
+                result = updater.run()
+                status = result.get("status")
+                data = result.get("data", {})
+                cache.store(status, data)
 
             if status == "NO_UPDATE":
                 self.update_status_label.setText("Update-Status: Keine neue Version verfügbar.")
@@ -703,14 +713,43 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, title, info_text)
 
         except Exception as e:
-            error_msg = str(e)
-            if "errno 11001" in error_msg.lower():
+            from updater import is_network_reachable
+
+            error_msg = str(e).lower()
+            if isinstance(e, ConnectionError) or (
+                "errno 11001" in error_msg or "no response" in error_msg
+            ):
+                if not is_network_reachable():
+                    QMessageBox.critical(
+                        self,
+                        "Update-Fehler",
+                        "Es besteht keine Verbindung zum Internet.\n"
+                        "Bitte prüfen Sie Ihre Netzwerkverbindung.",
+                    )
+                else:
+                    QMessageBox.critical(
+                        self,
+                        "Update-Fehler",
+                        "Der Update-Server ist aktuell nicht erreichbar.\n"
+                        "Bitte versuchen Sie es später erneut.",
+                    )
+            elif isinstance(e, ValueError):
+                QMessageBox.warning(
+                    self,
+                    "Update-Fehler",
+                    f"Die Update-Informationen sind ungültig:\n{e}",
+                )
+            elif isinstance(e, requests.RequestException):
                 QMessageBox.critical(
-                    self, "Update-Fehler", f"Es besteht keine Verbindung zum Internet."
+                    self,
+                    "Update-Fehler",
+                    f"Netzwerkfehler beim Update-Check:\n{e}",
                 )
             else:
                 QMessageBox.critical(
-                    self, "Update-Fehler", f"Update konnte nicht durchgeführt werden:\n{e}"
+                    self,
+                    "Update-Fehler",
+                    f"Update konnte nicht durchgeführt werden:\n{e}",
                 )
 
         finally:
@@ -742,7 +781,19 @@ class SettingsDialog(QDialog):
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            updater.start_update()
+            updater = EncryptHomeUpdater(
+                current_version=VERSION_FULL,
+                update_json_url=self.data.get("update_url", UPDATE_URL),
+            )
+            try:
+                manifest = updater.fetch_manifest()
+            except Exception as e:
+                raise ValueError(f"Update-Manifest konnte nicht geladen werden:\n{e}")
+
+            # Integritätsangabe aus dem validierten Manifest übernehmen
+            expected = manifest.get("sha256") or ""
+
+            updater.start_update(expected_sha256=expected)
         except Exception as e:
             QMessageBox.critical(
                 self, "Update-Fehler", f"Update konnte nicht gestartet werden:\n{e}"

@@ -1,0 +1,760 @@
+#!/usr/bin/env python3
+# ANCORATE EncryptHome - gesplittetes Modul
+# (aus main.py extrahiert; siehe main.py fuer Einstiegspunkt)
+# (c) 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
+#
+
+import os
+import sys
+import json
+import struct
+import time
+import hashlib
+import subprocess
+import socket
+import platform
+import requests
+from collections import OrderedDict
+from pathlib import Path
+from typing import Optional
+from PyQt6.QtCore import *
+from PyQt6.QtWidgets import *
+from PyQt6.QtGui import *
+from argon2.low_level import Type, hash_secret_raw
+
+# Interne Module
+from decrypt import *
+from decrypt_preview import PREVIEW_MAX_BYTES, PreviewDecryptWorker, show_preview
+from encrypt import *
+
+# Utilities
+from utilities.checksum_check import *
+from utilities.header_utils import *
+from utilities.settings import *
+
+# ============================================================
+# Globale Konstanten + Standalone-Helfer (aus main.py)
+# ============================================================
+
+MAGIC = b"ANC0"  # Magic-Header für ANCORATE .salt Container
+VERSION = 0x09  # Aktuelle Containerversion
+FLAG_DEVICE = 0x01  # Container ist an Gerät gebunden
+FLAG_KEYFILE = 0x02  # Container verwendet Keyfile
+FLAG_PRO_VAULT = 0x04  # Container wurde mit EncryptPro erstellt
+SALT_LEN = 16  # 16 Bytes Salt
+CHUNK = 128 * 1024  # 128 KB pro Verschlüsselungsblock
+META_LEN_SIZE = 8  # 8 Bytes für die Metadatenlänge am Ende der Datei
+ARGON2_TIME = 3  # Zeitkosten für Argon2
+ARGON2_MEM_KIB = 131072  # 128 MB Speicher für Argon2
+ARGON2_PAR = 4  # Parallelismus für Argon2
+ARGON2_OUT = 32  # Länge des ausgegebenen Schlüssels in Bytes
+SCRYPT_N = 2**14  # 16.384
+SCRYPT_R = 8  # 8 ist ein guter Standardwert für die Blockgröße
+SCRYPT_P = 1  # 1 ist ein guter Standardwert für die Parallelität
+PROJECT_PEPPER = b"ANCORATE_734912285612843967510042198831607952451"  # Fester Pepper-Wert für Passwort-Härtung
+HEADER_FMT = f"4s B B {SALT_LEN}s 6s"  # Magic, Version, Flags, Salt, Reserved (6 Bytes für zukünftige Erweiterungen)
+HEADER_LEN = struct.calcsize(HEADER_FMT)  # 4 + 1 + 1 + 16 + 6 = 28 Bytes
+HKDF_INFO = b"ANCORATE-MASTER-26"  # Info für HKDF
+HKDF_LENGTH = 32  # 32 Bytes -> AES-256
+LICENSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "licenses.dat")
+MASTER_KEY_LICENSE = b"ueeEu2Qv00JqDFb9K0vbEAL1MQsMRjDEItOMkzYUJwE="  # 32 Bytes fester Schlüssel für Lizenzdatei-Verschlüsselung
+CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".ancorate")
+
+os.makedirs(CONFIG_DIR, exist_ok=True)
+
+SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
+ANCORATE_BLUE = "#1e88e5"
+ANCORATE_BLUE_SOFT = "#90caf9"
+BACKGROUND_DARK = "#0b0f14"
+
+version = "26.2"  # aktuelle Version der Software, wird in gui angezeigt
+version_year = "26"
+edition = "EncryptHome"  # Edition der Software
+type_edition = "Citadel"
+
+# Prüfe und aktualisiere Checksummen der Systemdateien
+# verify_file_integrity(f"ANCORATE_{edition}_26.2_Build_0009.exe", update=True)
+
+
+if os.name == "nt":
+    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", str(Path.home())), "ANCORATE")
+else:
+    CONFIG_DIR = os.path.join(str(Path.home()), ".config", "ANCORATE")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "device.png")
+REGISTRATION_MARKER = os.path.join(CONFIG_DIR, ".registered")
+RECENT_CONTAINERS_FILE = os.path.join(CONFIG_DIR, "recent_containers.json")
+
+
+def get_app_icon():
+    """
+    Lädt das passende Icon-Format für die aktuelle Plattform.
+    """
+    system = platform.system()
+    
+    # Verschiedene Icon-Formate versuchen
+    icon_paths = []
+    
+    if system == "Windows":
+        icon_paths = [
+            "utilities/icon.ico",
+            "utilities/icon.png",
+        ]
+    else:
+        icon_paths = [
+            "utilities/icon.png",
+            "utilities/icon_64x64.png",
+            "utilities/icon_48x48.png",
+            "utilities/icon_32x32.png",
+        ]
+    
+    # Erstes existierendes Icon zurückgeben
+    for path in icon_paths:
+        if os.path.exists(path):
+            return QIcon(path)
+    
+    # Fallback: Leeres Icon
+    return QIcon()
+
+
+def read_json_file(path):
+    """Hilfsfunktion: Liest JSON ein"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def safe_run(cmd, timeout=1):
+    try:
+        out = subprocess.check_output(
+            cmd, stderr=subprocess.DEVNULL, shell=True, text=True, timeout=timeout
+        )
+        return out.strip()
+    except Exception:
+        return ""
+
+
+def get_mac_bytes():
+    import uuid
+
+    node = uuid.getnode()
+    return int(node).to_bytes(6, "big", signed=False)
+
+
+def get_cpu_id():
+    import platform
+    system = platform.system()
+    
+    try:
+        if system == "Windows":
+            out = safe_run("wmic cpu get ProcessorId")
+            if out:
+                lines = [
+                    l.strip() for l in out.splitlines() 
+                    if l.strip() and "ProcessorId" not in l
+                ]
+                if lines:
+                    return lines[0]
+        elif system == "Darwin":  # macOS
+            out = safe_run("sysctl -n machdep.cpu.brand_string")
+            if out:
+                return out.strip()
+        elif system == "Linux":
+            out = safe_run("cat /proc/cpuinfo | grep 'model name' | head -1")
+            if out:
+                # Format: "model name      : Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz"
+                parts = out.split(":")
+                if len(parts) > 1:
+                    return parts[1].strip()
+    except Exception as e:
+        print(f"[WARN] CPU ID detection failed: {e}")
+    
+    return "unknown-cpu"
+
+
+def get_disk_serial():
+    import platform
+    system = platform.system()
+    
+    try:
+        if system == "Windows":
+            out = safe_run("wmic diskdrive get SerialNumber")
+            if out:
+                lines = [
+                    l.strip() for l in out.splitlines() 
+                    if l.strip() and "SerialNumber" not in l
+                ]
+                if lines:
+                    return lines[0]
+            out = safe_run("vol C:")
+            if out:
+                return out.replace("\r", "").replace("\n", "").strip()
+        elif system == "Darwin":  # macOS
+            out = safe_run("diskutil info / | grep 'Volume UUID'")
+            if out:
+                # Format: "   Volume UUID: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+                parts = out.split(":")
+                if len(parts) > 1:
+                    return parts[1].strip()
+        elif system == "Linux":
+            out = safe_run("lsblk -d -o serial -n")
+            if out:
+                return out.strip()
+    except Exception as e:
+        print(f"[WARN] Disk serial detection failed: {e}")
+    
+    return "unknown-disk"
+
+
+def ensure_config_dir():
+    d = os.path.dirname(CONFIG_FILE)
+    os.makedirs(d, exist_ok=True)
+
+
+def save_device_key_hex(key_bytes: bytes):
+    """
+    Legacy function for compatibility. No longer saves to file since key is generated at runtime.
+    """
+    # Device key is now generated at runtime, no need to save
+    pass
+
+
+def device_fingerprint() -> bytes:
+    """Generate consistent device fingerprint from hardware identifiers"""
+    try:
+        mac = get_mac_bytes()
+        cpu = get_cpu_id().encode("utf-8", errors="ignore")
+        dsk = get_disk_serial().encode("utf-8", errors="ignore")
+        
+        # Validate components
+        if len(mac) != 6:
+            print(f"[WARN] Invalid MAC address length: {len(mac)}")
+        if not cpu:
+            print("[WARN] Could not get CPU ID")
+        if not dsk:
+            print("[WARN] Could not get disk serial")
+            
+        raw = b"|".join([b"MAC", mac, b"CPU", cpu, b"DSK", dsk])
+        fp = hashlib.sha256(raw).digest()
+        
+        print(f"[DEBUG] Device fingerprint generated successfully")
+        return fp
+    except Exception as e:
+        print(f"[ERROR] Device fingerprint generation failed: {e}")
+        # Fallback to random but consistent seed
+        import platform
+        fallback = f"{platform.node()}{platform.system()}".encode("utf-8")
+        return hashlib.sha256(fallback).digest()
+
+
+def generate_device_key() -> bytes:
+    """
+    Generate a consistent device key at runtime without storing to file.
+    Uses deterministic approach: SHA256(fingerprint + ANCORATE_SEED)
+    """
+    fp = device_fingerprint()
+    
+    # Use a fixed seed instead of random secret for consistency
+    seed = b"ANCORATE_DEVICE_KEY_SEED_2026_STABLE"
+    
+    # Generate deterministic key
+    device_key = hashlib.sha256(fp + seed).digest()
+    
+    return device_key
+
+
+def load_device_key() -> bytes:
+    """
+    Always generate the device key at runtime instead of loading from file.
+    This ensures the same key for the same device without file dependency.
+    """
+    try:
+        key = generate_device_key()
+        # Validate key is 32 bytes (AES-256)
+        if len(key) != 32:
+            raise ValueError(f"Invalid device key length: {len(key)} bytes, expected 32")
+        return key
+    except Exception as e:
+        print(f"[ERROR] Device key generation failed: {e}")
+        # Fallback to empty bytes if fingerprint generation fails
+        return b""
+
+
+def is_device_registered() -> bool:
+    """Check if this device has been registered before"""
+    return os.path.exists(REGISTRATION_MARKER)
+
+
+def mark_device_registered():
+    """Mark this device as registered"""
+    ensure_config_dir()
+    try:
+        with open(REGISTRATION_MARKER, "w") as f:
+            f.write("registered")
+    except Exception:
+        pass
+
+
+def load_recent_containers() -> list:
+    """Load recent containers list"""
+    try:
+        if os.path.exists(RECENT_CONTAINERS_FILE):
+            with open(RECENT_CONTAINERS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return []
+    except Exception:
+        return []
+
+
+def save_recent_containers(containers: list):
+    """Save recent containers list"""
+    try:
+        ensure_config_dir()
+        with open(RECENT_CONTAINERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(containers[:10], f, indent=2)  # Keep only last 10
+    except Exception as e:
+        print(f"[ERROR] Failed to save recent containers: {e}")
+
+
+def add_recent_container(container_path: str):
+    """Add container to recent list"""
+    containers = load_recent_containers()
+    
+    # Remove if already exists
+    containers = [c for c in containers if c["path"] != container_path]
+    
+    # Add to beginning
+    recent_entry = {
+        "path": container_path,
+        "name": os.path.basename(container_path),
+        "last_accessed": int(time.time())
+    }
+    containers.insert(0, recent_entry)
+    
+    save_recent_containers(containers)
+
+def rekey_container_password(
+    container_path: str,
+    current_meta: dict,
+    current_flags: int,
+    current_master_key: bytes,
+    new_password: str,
+) -> None:
+    if not os.path.isfile(container_path):
+        raise FileNotFoundError(f"Container nicht gefunden: {container_path}")
+
+    new_salt = secrets.token_bytes(SALT_LEN)
+    device_key = load_device_key() if (current_flags & FLAG_DEVICE) else None
+    new_master = derive_master_key(
+        new_password,
+        new_salt,
+        bool(current_flags & FLAG_DEVICE),
+        device_key,
+    )
+
+    # Re-encrypt all file data with new master key
+    new_meta = dict(current_meta)
+    new_meta["flags"] = current_flags
+    
+    # Read old salt from container for decryption
+    with open(container_path, "rb") as source:
+        header = source.read(HEADER_LEN)
+        magic, version, flags, old_salt, _reserved = struct.unpack(HEADER_FMT, header)
+    
+    # Derive old master key for decryption
+    # Note: We need the old password to derive the old master key
+    # Since we don't have it here, we'll use the passed current_master_key directly
+    
+    # Re-encrypt each file blob
+    new_files = []
+    current_offset = HEADER_LEN
+    
+    for file_entry in current_meta.get("files", []):
+        file_name = file_entry["name"]
+        file_offset = file_entry["offset"]
+        file_length = file_entry["length"]
+        
+        # Decrypt with old master key and re-encrypt with new master key.
+        # Wichtig: Falls eine Datei nicht neu verschlüsselt werden kann, wird der
+        # komplette Vorgang abgebrochen (Exception), BEVOR irgendetwas geschrieben
+        # wird. Andernfalls würde der neue Header/Meta einen neuen Key verwenden,
+        # während der Alt-Blob mit dem alten Key verschlüsselt bliebe und die
+        # Datei dauerhaft unlesbar würde.
+        tmp_decrypt_path = None
+        tmp_encrypt_path = None
+        try:
+            from decrypt import decrypt_blob_range
+            from encrypt import encrypt_file_to_blob
+            import tempfile as tf
+
+            # Create temporary file for decrypted data
+            with tf.NamedTemporaryFile(delete=False) as tmp_decrypt:
+                tmp_decrypt_path = tmp_decrypt.name
+
+            # Decrypt blob to temp file
+            with open(container_path, "rb") as source:
+                source.seek(file_offset)
+                decrypt_blob_range(source, tmp_decrypt_path, file_length, current_master_key, file_name)
+
+            # Re-encrypt with new master key
+            with tf.NamedTemporaryFile(delete=False) as tmp_encrypt:
+                tmp_encrypt_path = tmp_encrypt.name
+
+            with open(tmp_encrypt_path, "wb") as tmp_encrypt_file:
+                encrypt_file_to_blob(
+                    tmp_decrypt_path,
+                    tmp_encrypt_file,
+                    new_master,
+                    filename=file_name,
+                )
+
+            # Read re-encrypted blob
+            with open(tmp_encrypt_path, "rb") as enc_file:
+                reencrypted_blob = enc_file.read()
+
+            # Store re-encrypted blob in file entry for later writing
+            file_entry_with_blob = {
+                "name": file_name,
+                "offset": current_offset,
+                "length": len(reencrypted_blob),
+                "size": file_entry.get("size", 0),
+                "blob": reencrypted_blob
+            }
+            new_files.append(file_entry_with_blob)
+
+            current_offset += len(reencrypted_blob)
+
+        except Exception as e:
+            raise RuntimeError(
+                f"Passwortwechsel fehlgeschlagen bei '{file_name}': {e}. "
+                "Der Tresor bleibt unverändert."
+            ) from e
+        finally:
+            # Temporäre Dateien in jedem Fall aufräumen
+            if tmp_decrypt_path:
+                try:
+                    os.remove(tmp_decrypt_path)
+                except Exception:
+                    pass
+            if tmp_encrypt_path:
+                try:
+                    os.remove(tmp_encrypt_path)
+                except Exception:
+                    pass
+    
+    # Create clean metadata without blob fields for JSON serialization
+    new_meta_files = []
+    for file_entry in new_files:
+        clean_entry = {
+            "name": file_entry["name"],
+            "offset": file_entry["offset"],
+            "length": file_entry["length"],
+            "size": file_entry.get("size", 0)
+        }
+        new_meta_files.append(clean_entry)
+    
+    new_meta["files"] = new_meta_files
+    new_meta_blob = encrypt_meta(new_meta, new_master)
+
+    container_dir = os.path.dirname(container_path) or os.curdir
+    temp_path = None
+    try:
+        with open(container_path, "rb") as source, tempfile.NamedTemporaryFile(
+            delete=False, dir=container_dir
+        ) as tmp:
+            temp_path = tmp.name
+
+            header = source.read(HEADER_LEN)
+            if len(header) != HEADER_LEN:
+                raise ValueError("Container-Header ist beschädigt oder unvollständig.")
+            magic, version, flags, _salt, _reserved = struct.unpack(HEADER_FMT, header)
+            if magic != MAGIC:
+                raise ValueError("Ungültiger Container-Header.")
+            if flags != current_flags:
+                raise ValueError("Container-Flags stimmen nicht mit dem geöffneten Tresor überein.")
+
+            source.seek(0, os.SEEK_END)
+            file_size = source.tell()
+            if file_size < HEADER_LEN + META_LEN_SIZE:
+                raise ValueError("Container ist zu kurz.")
+
+            source.seek(-META_LEN_SIZE, os.SEEK_END)
+            old_meta_len_bytes = source.read(META_LEN_SIZE)
+            if len(old_meta_len_bytes) != META_LEN_SIZE:
+                raise ValueError("Metadatenlänge konnte nicht gelesen werden.")
+            old_meta_len = struct.unpack("<Q", old_meta_len_bytes)[0]
+
+            data_end = file_size - META_LEN_SIZE - old_meta_len
+            if data_end < HEADER_LEN:
+                raise ValueError("Metadatenposition ist ungültig.")
+
+            write_header(tmp, current_flags, new_salt)
+            
+            # Write re-encrypted file blobs
+            for file_entry in new_files:
+                blob = file_entry["blob"]
+                tmp.write(blob)
+
+            tmp.write(new_meta_blob)
+            tmp.write(struct.pack("<Q", len(new_meta_blob)))
+
+        os.replace(temp_path, container_path)
+        temp_path = None
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+def auto_register_device(export_path: str | None = None) -> bytes:
+    """
+    Legacy function for compatibility. Now generates and optionally exports the device key.
+    The key is generated deterministically and doesn't need to be stored.
+    """
+    device_key = generate_device_key()
+    
+    # Mark device as registered
+    mark_device_registered()
+
+    if export_path:
+        try:
+            with open(export_path, "wb") as f:
+                f.write(device_key)
+        except Exception:
+            pass
+
+    return device_key
+
+
+def derive_argon2(password_bytes: bytes, salt: bytes) -> bytes:
+    key = hash_secret_raw(
+        secret=password_bytes,
+        salt=salt,
+        time_cost=ARGON2_TIME,
+        memory_cost=ARGON2_MEM_KIB,
+        parallelism=ARGON2_PAR,
+        hash_len=ARGON2_OUT,
+        type=Type.ID,
+    )
+    return key
+
+
+def derive_master_key(
+    password: str,
+    salt: bytes,
+    device_bound: bool = False,
+    device_key: Optional[bytes] = None,
+) -> bytes:
+    try:
+        if not isinstance(password, str):
+            raise TypeError("password muss str sein.")
+        if not isinstance(salt, bytes) or len(salt) != 16:
+            raise ValueError("salt muss 16 Bytes lang sein.")
+        if device_bound and (device_key is None):
+            raise ValueError("device_bound=True verlangt device_key")
+
+        # Validate device key if device bound
+        if device_bound and device_key:
+            if len(device_key) != 32:
+                raise ValueError(f"Invalid device key length: {len(device_key)}")
+
+        # Passwort + Pepper → Argon2
+        pwd_bytes = password.encode("utf-8") + PROJECT_PEPPER
+        pwd_key = derive_argon2(pwd_bytes, salt)  # 32 Bytes
+
+        # Device-Binding sicher per Hash (32 Bytes)
+        device_hash = hashlib.sha256(device_key).digest() if device_key else b""
+
+        # Kombinieren als Input für HKDF (variabel lang)
+        ikm = pwd_key + device_hash
+
+        # HKDF erzwingt exakt 32 Bytes → AES-256 kompatibel
+        master = HKDF(
+            algorithm=hashes.SHA256(), length=HKDF_LENGTH, salt=salt, info=HKDF_INFO
+        ).derive(ikm)
+
+        print(f"[DEBUG] Master key derived successfully")
+        return master
+    except Exception as e:
+        print(f"[ERROR] Master key derivation failed: {e}")
+        raise
+
+
+def validate_password_strength(password: str) -> tuple[bool, str]:
+    """
+    Validate password strength and return (is_valid, error_message)
+    Requirements:
+    - At least 8 characters
+    - At least 1 uppercase letter
+    - At least 1 lowercase letter  
+    - At least 1 digit
+    - At least 1 special character
+    """
+    if len(password) < 8:
+        return False, "Passwort muss mindestens 8 Zeichen lang sein."
+    
+    has_upper = any(c.isupper() for c in password)
+    if not has_upper:
+        return False, "Passwort muss mindestens 1 Großbuchstaben enthalten."
+    
+    has_lower = any(c.islower() for c in password)
+    if not has_lower:
+        return False, "Passwort muss mindestens 1 Kleinbuchstaben enthalten."
+    
+    has_digit = any(c.isdigit() for c in password)
+    if not has_digit:
+        return False, "Passwort muss mindestens 1 Ziffer enthalten."
+    
+    has_special = any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in password)
+    if not has_special:
+        return False, "Passwort muss mindestens 1 Sonderzeichen enthalten (!@#$%^&* etc.)."
+    
+    return True, ""
+
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    ip = ""
+    try:
+        # "Verbindung" zu einer externen Adresse aufbauen (wird nicht wirklich gesendet)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        print("Device offline. It has to be online to identify its IP address.")
+    finally:
+        s.close()
+    return ip
+
+
+def write_header(fh, flags: int, salt: bytes):
+    """
+    Schreibt den ANCORATE-Container-Header an den Anfang der Datei.
+    fh muss im Write- oder Read/Write-Modus geöffnet sein.
+    Überschreibt vorhandene Headerdaten vollständig.
+    """
+    if len(salt) != SALT_LEN:
+        raise ValueError(
+            f"Salt muss {SALT_LEN} Bytes lang sein (erhalten: {len(salt)})"
+        )
+    
+    # Ensure flags is within valid range for B format (0-255)
+    if flags < 0 or flags > 255:
+        raise ValueError(
+            f"Flags müssen im Bereich 0-255 liegen (erhalten: {flags})"
+        )
+
+    reserved = b"\x00" * 6
+    header = struct.pack(HEADER_FMT, MAGIC, VERSION, flags, salt, reserved)
+
+    # Sicherstellen, dass am Anfang geschrieben wird
+    fh.seek(0)
+    fh.write(header)
+    fh.flush()
+
+
+def read_header(fh):
+    """
+    Liest den Header eines geöffneten Containers und repariert ihn bei Bedarf.
+    fh muss im Read/Write-Modus geöffnet sein.
+    Gibt die Felder zurück: (version, flags, salt)
+    """
+    fh.seek(0)
+    data = fh.read(HEADER_LEN)
+
+    # Header zu kurz → reparieren
+    if len(data) < HEADER_LEN or not data.startswith(MAGIC):
+        print("[WARN] Header beschädigt oder unvollständig. Wird repariert.")
+        salt = os.urandom(SALT_LEN)
+        fh.seek(0)  # Anfang der Datei
+        write_header(fh, FLAG_DEVICE | FLAG_KEYFILE, salt)
+        fh.flush()
+        fh.seek(0)  # wieder an Anfang
+        data = fh.read(HEADER_LEN)  # reparierten Header neu einlesen
+
+    # Header vollständig → auslesen (data wurde nach einer Reparatur neu gelesen)
+    magic, ver, flags, salt, _ = struct.unpack(HEADER_FMT, data)
+    if magic != MAGIC:
+        print("[WARN] Ungültige Magic Bytes. Header wird ersetzt.")
+        salt = os.urandom(SALT_LEN)
+        fh.seek(0)
+        write_header(fh, FLAG_DEVICE | FLAG_KEYFILE, salt)
+        fh.flush()
+        fh.seek(0)
+        data = fh.read(HEADER_LEN)  # neu geschriebenen Header lesen
+        _, _, flags, salt, _ = struct.unpack(HEADER_FMT, data)
+
+    # Header ok
+    return flags, salt
+
+
+class notifier:
+    @staticmethod
+    def show(title: str, message: str, timeout: int = 1):
+        """
+        Zeigt eine System-Push-Benachrichtigung an.
+
+        :param title: Titel der Nachricht
+        :param message: Inhalt der Nachricht
+        :param timeout: Dauer in Sekunden (optional)
+        """
+        # notification.notify(
+        #     title=title,
+        #     message=message,
+        #     timeout=timeout
+        # )
+
+
+# Einfachen trennenden Strich erzeugen - wird in DetailsDialog verwendet
+def make_separator(color="#2a2c32"):
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setFixedHeight(1)
+    line.setStyleSheet(f"background-color: {color}; border: none;")
+    return line
+
+def load_theme_setting():
+    path = SETTINGS_FILE
+    if not os.path.exists(path):
+        return "Standard-dark"  # Standard-Theme
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("theme", "Standard-dark")
+    except Exception:
+        return "Standard-dark"
+
+# ---------------------------------------------------------
+# Base Path (EXE-Verzeichnis)
+# ---------------------------------------------------------
+base_path = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+# ---------------------------------------------------------
+# Theme auswählen
+# ---------------------------------------------------------
+theme = load_theme_setting()
+
+THEMES = {
+    "Standard-light": "utilities/themes/light.css",
+    "Standard-dark": "utilities/themes/dark_fixed.css",
+    "Quantum": "utilities/themes/quantum.css",
+    "Precision-light": "utilities/themes/precision-light.css",
+    "Precision-dark": "utilities/themes/precision-dark.css",
+    "Hackers-dark": "utilities/themes/hackers-dark.css",
+    "Cyber-blue": "utilities/themes/cyber-blue.css",
+}
+
+# Default auf dark
+css_file = THEMES.get(theme, "utilities/themes/dark_fixed.css")
+css_path = os.path.join(base_path, css_file)
+
+# ---------------------------------------------------------
+# CSS laden
+# ---------------------------------------------------------
+try:
+    with open(css_path, "r", encoding="utf-8") as f:
+        APP_STYLE = f.read()
+except Exception as e:
+    print(f"CSS loading failed: {e}")
+    APP_STYLE = ""
