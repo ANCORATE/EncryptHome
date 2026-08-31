@@ -1,394 +1,218 @@
-# EncryptHome Architecture Documentation
+# EncryptHome Architecture
 
-## System Architecture Overview
+## Scope
 
-EncryptHome follows a modular architecture with clear separation of concerns between encryption, user interface, and utility functions. The system is designed around a secure vault container format with device-bound encryption capabilities.
+This document describes the implementation currently present in the repository. Planned or commented-out features are not presented as implemented features.
 
-## High-Level Architecture
+## Entry point and module structure
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     User Interface Layer                    │
-│                    (PyQt6 - main.py)                        │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ├─────────────────┐
-                         │                 │
-                         ▼                 ▼
-┌─────────────────────────────────┐  ┌──────────────────────┐
-│      Encryption Engine          │  │   Utility Modules    │
-│  ┌───────────────────────────┐  │  │                      │
-│  │ base.py                  │  │  │ settings.py          │
-│  │ - Key derivation         │  │  │ header_utils.py      │
-│  │ - HKDF functions         │  │  │ checksum_check.py    │
-│  ├───────────────────────────┤  │  │ sos_delete.py        │
-│  │ encrypt.py               │  │  │ updater.py           │
-│  │ - File encryption        │  │  └──────────────────────┘
-│  │ - Metadata encryption     │  │
-│  ├───────────────────────────┤  │
-│  │ decrypt.py               │  │
-│  │ - File decryption        │  │
-│  │ - Blob handling          │  │
-│  ├───────────────────────────┤  │
-│  │ decrypt_preview.py       │  │
-│  │ - In-memory preview      │  │
-│  └───────────────────────────┘  │
-└─────────────────────────────────┘
+`main.py` is the application entry point. It imports and re-exports the application modules for compatibility with existing imports.
+
+```text
+main.py
+ ├── app/core.py
+ ├── app/passwords.py
+ ├── app/workers.py
+ ├── app/dialogs.py
+ └── app/main_window.py
+
+Cryptography / storage
+ ├── base.py
+ ├── encrypt.py
+ ├── decrypt.py
+ └── decrypt_preview.py
+
+Utilities
+ ├── settings.py
+ ├── header_utils.py
+ ├── checksum_check.py
+ ├── sos_delete.py
+ ├── updater.py
+ └── screenshot_protection.py
 ```
 
-## Component Architecture
+## Application startup
 
-### 1. Main Application (main.py)
-
-**Responsibilities:**
-- GUI orchestration and window management
-- User interaction handling
-- Vault lifecycle management
-- Device binding operations
-- File encryption/decryption coordination
-
-**Key Classes:**
-- `App(QWidget)` - Main application window
-- `SetupDialog(QDialog)` - Device (PC-key) registration upon first run
-- `LoginDialog(QDialog)` - Device-based login/authentication
-- `FileDropList(QListWidget)` - Custom file list widget with drag-and-drop
-- `FreshStartup(QWidget)` - Animated splash/startup screen
-- `WelcomeOverlay`, `TermsOfServiceDialog`, `UpdateNewsDialog`, `DetailDialog`, `AboutDialog` - Supporting dialogs
-- Various worker objects for background operations
-
-**Data Flow:**
-```
-User Action → GUI Event → Validation → Worker Thread → 
-Encryption/Decryption → Metadata Update → Container Update → UI Refresh
+```text
+main.py
+  ↓
+QApplication
+  ↓
+screenshot protection installation
+  ↓
+device-key generation/check
+  ↓
+registered device → App
+new device → Welcome → Terms → Login/Setup
+  ↓
+Qt event loop
 ```
 
-### 2. Encryption Engine
+Screenshot protection is optional. On Windows it is installed for EncryptHome-owned Qt windows. On other platforms the installer returns without changing application behavior.
 
-#### base.py (Cryptographic Foundation)
-**Purpose:** Core cryptographic operations and key derivation
+## Main application
 
-**Key Functions:**
-```python
-derive_subkey(master_key: bytes, file_nonce: bytes, filename: str) -> bytes
-```
-- Uses HKDF-SHA256 for per-file key derivation
-- Ensures unique encryption keys for each file
-- Prevents cross-file cryptographic attacks
+### `app/main_window.py`
 
-#### encrypt.py (Encryption Operations)
-**Purpose:** File and metadata encryption
+Contains `App(QWidget)`, the main application window and the main vault workflow. The class handles vault state, UI actions, file operations, preview caching, settings integration, update checks and LAN functionality.
 
-**Key Functions:**
-- `encrypt_meta(meta: dict, master_key: bytes) -> bytes`
-  - Encrypts vault metadata using AES-GCM
-  - Structure: nonce(12) + ciphertext + tag + hmac(32)
-  
-- `encrypt_file_to_blob(src_path: str, out_fh, master_key: bytes, ...)`
-  - Encrypts individual files to encrypted blobs
-  - Progress callback support
-  - Cancellation support via stop_event
+### `app/dialogs.py`
 
-**File Encryption Process:**
-```
-File → Read in 128KB chunks → AES-GCM encryption → 
-HMAC calculation → Write to blob → Append tag and HMAC
-```
+Contains the application dialogs and UI widgets used by the current application, including setup/login, vault/file UI, update/news, details/about, terms and welcome UI.
 
-#### decrypt.py (Decryption Operations)
-**Purpose:** File and metadata decryption
+### `app/passwords.py`
 
-**Key Functions:**
-- `decrypt_meta(blob: bytes, master_key: bytes) -> dict`
-  - Decrypts vault metadata
-  - Verifies HMAC integrity
-  - Returns parsed metadata dictionary
+Contains password requirement handling and password-change UI/helpers.
 
-- `decrypt_blob_range(fh, out_path: str, blob_len: int, master_key: bytes, ...)`
-  - Decrypts file blobs from container
-  - Temporary file handling
-  - Integrity verification
+### `app/workers.py`
 
-**Decryption Process:**
-```
-Blob → Read nonce → Verify HMAC → Derive subkey → 
-AES-GCM decryption → Write temporary file → Atomic rename
-```
+Contains the background worker objects used by the application, including file-add, export, batch export and startup-update operations.
 
-#### decrypt_preview.py (Preview System)
-**Purpose:** In-memory file preview without disk writes
+### `app/core.py`
 
-**Key Components:**
-- `PreviewDecryptWorker(QObject)` - Background preview decryption
-- `decrypt_entry_to_bytes(...)` - Main preview decryption logic
-- Preview size limits (512 MB per file, 200 MB total cache)
-- LRU cache management
+Contains shared constants and standalone application helpers used by the split application modules.
 
-**Preview Process:**
-```
-File Request → Check Cache → If miss: Decrypt to RAM → 
-Apply size limits → Display in UI → Update LRU cache
+## Cryptography
+
+### `base.py`
+
+Provides the cryptographic foundation, including per-file subkey derivation.
+
+### `encrypt.py`
+
+Encrypts files and vault metadata and writes encrypted blobs to the container.
+
+### `decrypt.py`
+
+Decrypts metadata and file blobs and performs the associated integrity checks.
+
+### `decrypt_preview.py`
+
+Provides in-memory preview decryption. Preview data is kept in an LRU cache with a 200 MiB total cache limit and a per-file preview limit defined by `PREVIEW_MAX_BYTES`.
+
+## Vault data flow
+
+### Create/open
+
+```text
+User
+ ↓
+select/create .salt container
+ ↓
+password/device authentication
+ ↓
+master-key derivation
+ ↓
+read/write encrypted metadata
+ ↓
+vault state in App
 ```
 
-### 3. Utility Modules
+### Add files
 
-#### settings.py (Configuration Management)
-**Responsibilities:**
-- Application settings storage and retrieval
-- Settings UI dialog
-- Keyboard shortcut management
-- Theme configuration
-- Update mechanism integration
-
-**Configuration Storage:**
-- Linux: `~/.config/ANCORATE/settings.json`
-- Windows: `%APPDATA%\ANCORATE\settings.json`
-
-#### header_utils.py (Container Header Management)
-**Responsibilities:**
-- Header validation and verification
-- Header repair functionality
-- Container format compliance checking
-
-**Key Functions:**
-- `detect_header_state(...)` - Determines header presence/completeness
-- `restore_header(...)` - Repairs damaged headers
-- `verify_header(...)` - Validates header structure
-
-#### checksum_check.py (Integrity Verification)
-**Responsibilities:**
-- System file integrity verification
-- SHA-256 checksum calculation and storage
-- Tamper detection and user notification
-- Audit logging
-
-**Verification Process:**
-```
-Application Start → Load stored checksums → Calculate current checksums → 
-Compare → Notify user of changes → Log verification results
+```text
+selected files
+ ↓
+AddWorker
+ ↓
+encrypt file blob
+ ↓
+update metadata
+ ↓
+write updated container
 ```
 
-#### sos_delete.py (Emergency Vault Wiper)
-**Responsibilities:**
-- Scan all mounted drives for `.salt` vault containers (`SaltScannerUI`)
-- Emergency deletion of all found vaults
-- Used for the "Alle Tresore löschen" maintenance action in Settings
+### Export files
 
-> Note: The secure overwrite algorithms (Standard, DoD 5220.22-M, Gutmann,
-> ANCORATE Vaporizer 1 (100x), ANCORATE Furnace Max (200x),
-> ANCORATE Shatterer Ultra (300x)) are implemented in `main.py._secure_overwrite`
-> and are used when deleting a single file or the whole container from within the app.
-
-## Data Flow Architecture
-
-### Vault Creation Flow
-```
-User initiates vault creation
-    ↓
-choose_container(2) selects location and a name
-    ↓
-Get password (with strength requirements)
-    ↓
-Generate random salt (16 bytes)
-    ↓
-Derive master key (Argon2id + HKDF, optional device binding)
-    ↓
-Build empty metadata {"files": [], "created": ..., "flags": flags}
-    ↓
-Encrypt and write metadata
-    ↓
-Save container file
+```text
+selected vault entries
+ ↓
+ExportWorker / ExportBatchWorker
+ ↓
+read encrypted blob
+ ↓
+verify integrity
+ ↓
+decrypt
+ ↓
+write destination file
 ```
 
-### File Encryption Flow
-```
-User adds files via drag-and-drop
-    ↓
-Validate file paths and permissions
-    ↓
-Create AddWorker thread
-    ↓
-For each file:
-    - Generate file nonce (16 bytes)
-    - Derive file-specific subkey
-    - Encrypt file with AES-GCM
-    - Calculate HMAC
-    - Append to container
-    - Update metadata
-    ↓
-Re-encrypt metadata with new file list
-    ↓
-Write metadata length and encrypted metadata
-    ↓
-Update UI with progress
+### Preview
+
+```text
+vault entry
+ ↓
+PreviewDecryptWorker
+ ↓
+decrypt to bytes in memory
+ ↓
+LRU preview cache
+ ↓
+preview UI
 ```
 
-### File Decryption Flow
-```
-User selects files and triggers export
-    ↓
-Validate decryption permissions
-    ↓
-Create ExportWorker thread
-    ↓
-For each file:
-    - Read file blob from container
-    - Verify HMAC integrity
-    - Derive subkey from file nonce
-    - Decrypt with AES-GCM
-    - Verify GCM tag
-    - Write to destination
-    - Delete source if configured
-    ↓
-Update UI with progress
+### Password change
+
+Changing the vault password re-encrypts the container data with a newly derived master key. It is not a metadata-only key wrap operation.
+
+## Container format
+
+The current container header is defined by the implementation in `app/core.py` and uses:
+
+```text
+Magic:    ANC0
+Version:  0x09
+Flags:    device/keyfile/pro-related flags
+Salt:     16 bytes
+Reserved: 6 bytes
 ```
 
-### Password Change Flow
-```
-User initiates password change
-    ↓
-Verify new password meets strength requirements
-    ↓
-Generate new salt
-    ↓
-Derive new master key with new password (and device key if bound)
-    ↓
-For each file blob in container:
-    - Decrypt blob with old master key (decrypt_blob_range)
-    - Re-encrypt with new master key (encrypt_file_to_blob)
-    - Record new blob length/offset
-    ↓
-Write new header (with new salt)
-    ↓
-Write all re-encrypted blobs
-    ↓
-Re-encrypt metadata with new master key
-    ↓
-Atomic rewrite of the container
-```
+The resulting header is 28 bytes. The container then stores encrypted file blobs followed by encrypted metadata and its length information.
 
-## Container Format Architecture
+The implementation is authoritative for the exact binary layout. Changes to this format require explicit compatibility work.
 
-### Header Structure (28 bytes)
-```
-Offset | Size | Description
--------|------|-------------
-0      | 4    | Magic bytes (ANC0)
-4      | 1    | Version (0x09)
-5      | 1    | Flags (device, keyfile, pro)
-6      | 16   | Salt
-22     | 6    | Reserved (future use)
-```
+## Utilities
 
-### Data Layout
-```
-[Header 28B]
-[File Blob 1]
-[File Blob 2]
-...
-[File Blob N]
-[Meta Length 8B]
-[Encrypted Metadata]
-```
+### `utilities/settings.py`
 
-### File Blob Structure
-```
-Offset | Size | Description
--------|------|-------------
-0      | 16   | File nonce
-16     | 12   | GCM nonce
-28     | var  | Ciphertext
--      | 16   | GCM tag
--      | 32   | HMAC
-```
+Application settings, settings UI, shortcuts and theme configuration.
 
-## Memory Architecture
+### `utilities/header_utils.py`
 
-### Memory Management Strategy
-- **Preview Cache**: LRU cache with 200 MB total limit
-- **Per-File Limit**: 512 MB maximum per preview
-- **Chunk Size**: 128 KB for encryption/decryption operations
-- **Temporary Files**: Secure cleanup after operations
-- **Garbage Collection**: Periodic cleanup every 10 seconds
+Container-header validation, detection and repair helpers.
 
-### Key Storage
-- **Master Key**: Exists in memory only during session
-- **Device Key**: Generated deterministically at runtime
-- **File Subkeys**: Derived on-demand, not stored
-- **No Plaintext Storage**: Keys never written to disk
+### `utilities/checksum_check.py`
 
-## Threading Architecture
+Application integrity/checksum verification and related logging/notifications.
 
-### Worker Threads
-- **AddWorker**: Handles file encryption into the container
-- **ExportWorker**: Handles single file decryption
-- **ExportBatchWorker**: Handles batch file decryption
-- **PreviewDecryptWorker**: Handles in-memory preview decryption
-- **ChangelogWorker**: Fetches the changelog for the Settings dialog
-- **StartupUpdateWorker**: Checks for updates in the background on startup
-### Thread Safety
-- PyQt6 signals/slots for cross-thread communication
-- Stop events for cancellation support
-- Mutex protection for shared resources
-- Atomic file operations
+### `utilities/sos_delete.py`
 
-## Error Handling Architecture
+Scans mounted drives for `.salt` vaults and provides the emergency vault deletion workflow.
 
-### Error Categories
-1. **Cryptographic Errors**: Invalid password, corrupted/tampered data (HMAC/GCM failures)
-2. **I/O Errors**: File access issues, disk full, unexpected EOF
-3. **Authentication Errors**: Device mismatch (wrong device key)
-4. **Validation Errors**: Invalid container format, corrupted headers, pro-vault flag present
+### `utilities/updater.py`
 
-### Error Recovery
-- Graceful degradation where possible
-- User notification with actionable messages
-- Automatic cleanup of temporary files
-- State preservation on error
+Update-related functionality.
 
-## Extension Points
+### `utilities/screenshot_protection.py`
 
-### Planned Features
-- Network sharing (discovery modules commented out)
-- Multi-factor authentication
-- Cloud storage integration
-- Advanced preview formats
-- Plugin system
+Optional Windows screenshot/capture protection using `SetWindowDisplayAffinity` with `WDA_EXCLUDEFROMCAPTURE`. The module is safe to import on Linux and macOS, where the public installation function is a no-op.
 
-### Customization Points
-- Keyboard shortcuts (configurable)
-- Theme system (configurable)
-- Deletion methods (selectable)
-- Update sources (configurable)
+## Threading
 
-## Performance Considerations
+The application uses PyQt6 worker objects and signals for background operations. Current workers include:
 
-### Optimization Strategies
-- Chunked processing (128 KB blocks)
-- Background threading for I/O operations
-- LRU caching for frequently accessed previews
-- Lazy key derivation
-- Progress callbacks for responsive UI
+- `AddWorker`
+- `ExportWorker`
+- `ExportBatchWorker`
+- `StartupUpdateWorker`
+- preview worker functionality from `decrypt_preview.py`
 
-### Resource Limits
-- Maximum file size: Limited by available memory
-- Preview cache: 200 MB total
-- Per-file preview: 512 MB
-- Encryption chunk size: 128 KB
-- Auto-lock timeout: 5 minutes
+The application also uses background threads for selected LAN/search/update-related work.
 
-## Security Architecture Integration
+## Compatibility principles
 
-### Layered Security
-1. **Application Layer**: Authentication, access control
-2. **Encryption Layer**: AES-GCM, HKDF, Argon2id
-3. **Integrity Layer**: HMAC verification, checksum validation
-4. **Device Layer**: Hardware fingerprinting, device binding
-5. **Storage Layer**: Secure deletion, temporary file cleanup
-
-### Defense in Depth
-- Multiple independent security mechanisms
-- No single point of failure
-- Graceful degradation on component failure
-- Comprehensive error handling and logging
-
-This architecture ensures strong security while maintaining usability and performance across different platforms and use cases.
+- Existing `.salt` containers are handled by the current container implementation.
+- `main.py` keeps compatibility re-exports for code importing legacy symbols from `main`.
+- Screenshot protection does not modify the vault format or encryption/decryption logic.
+- Platform-specific features must fail safely and must not prevent the main application from starting.
