@@ -52,12 +52,17 @@ def main():
 
     from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
+    from utilities.screenshot_protection import install_screenshot_protection
 
     print(f"ANCORATE {edition} {version} - Initializing...", flush=True)
 
     app = QApplication(sys.argv)
     app.setStyle(QStyleFactory.create("Fusion"))
     app.setStyleSheet(APP_STYLE)
+
+    # Protect EncryptHome-owned windows from supported Windows screen capture APIs.
+    # The helper is a no-op on non-Windows platforms.
+    install_screenshot_protection(app)
 
     # =========================
     # Device registration check
