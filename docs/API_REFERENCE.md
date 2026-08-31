@@ -669,6 +669,8 @@ DEFAULT_SETTINGS = {
 }
 ```
 
+**Theme handling:** Only two themes exist — `Standard-dark` (default) and `Standard-White` (`VALID_THEMES = ("Standard-dark", "Standard-White")`). During `load_settings()`, any legacy or unknown stored theme value is automatically migrated to `Standard-dark`. The mapping of theme name to stylesheet file lives in `app.core.THEMES`, with `DEFAULT_THEME = "Standard-dark"` as fallback. `app.core.APP_STYLE` holds the loaded stylesheet that is applied application-wide.
+
 ### Classes
 
 #### `SettingsDialog(QDialog)`
@@ -683,7 +685,7 @@ SettingsDialog.__init__(parent=None)
 **Tabs:**
 - General ("Allgemein"): System behavior, security/deletion method, maintenance
 - Shortcuts ("Kurzbefehle"): Keyboard shortcut configuration
-- Design: Theme and appearance (Standard-light/dark, Quantum, Precision, Hacker's, Cyber-blue)
+- Design: Theme and appearance (Standard-dark / Standard-White)
 - Updates: Changelog, update check and install
 
 **Methods:**

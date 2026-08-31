@@ -683,17 +683,11 @@ class PreviewDialog(QDialog):
             else "❌ Dieser Dateityp wird leider aktuell nicht unterstützt.\nUnterstützte Dateitypen: .pdf, .txt, .png, .jpg, .jpeg, .bmp, .gif, .webp, .mp4, .m4v, .mov, .avi, .mkv, .webm, .wmv, .mpg, .mpeg, .3gp, .3g2, .flv"
         )
         label = QLabel(text)
+        label.setObjectName("PreviewError")
         label.setWordWrap(True)
         label.setAlignment(
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
         )
-        label.setStyleSheet("""
-            QLabel {
-                color: #aa0000;
-                font-size: 14px;
-                padding: 20px;
-            }
-        """)
         layout.addWidget(label, 1)
 
     def _copy_best(self, kind: str, data: bytes):

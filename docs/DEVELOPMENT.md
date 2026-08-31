@@ -121,7 +121,7 @@ EncryptHome/
 │   ├── checksum_check.py   # Integrity verification
 │   ├── sos_delete.py       # Emergency vault scanner/wiper
 │   ├── updater.py          # Update mechanism
-│   └── themes/             # Qt stylesheet themes
+│   └── themes/             # Central Qt stylesheets (standard-dark.css / standard-white.css)
 ├── docs/                   # Documentation
 ├── AGENTS.md              # Development guidelines
 └── README.md              # Project readme

@@ -267,9 +267,6 @@ class UpdateNewsDialog(QDialog):
 
         details = QTextBrowser()
         details.setOpenExternalLinks(True)
-        details.setStyleSheet(
-            "background-color: #1b1e24; color: #e7e7e7; border: 1px solid #444;"
-        )
 
         notes = (
             update_data.get("changelog")
@@ -327,68 +324,21 @@ class DetailsDialog(QDialog):
             self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
         )
 
-        BG = "#0b0f16"
-        CARD = "#0f1522"
-        BORDER = "rgba(255,255,255,0.08)"
-        ACCENT = "#2f7cf6"  # Blauer Akzent (Hauptfenster-Design)
-        TEXT = "#e6eef8"
-        MUTED = "#9fb0d8"
-        TAG_BG = "#111827"
-        TAG_FG = "#cfd8ea"
-
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {BG};
-                font-family: 'Segoe UI', 'Roboto', Arial;
-                color: {TEXT};
-            }}
-            QScrollArea, QWidget#Scroll {{
-                background: transparent;
-                border: none;
-            }}
-            QLabel {{
-                color: {TEXT};
-                font-family: 'Segoe UI', 'Roboto', Arial;
-            }}
-            QFrame#Section {{
-                background-color: {CARD};
-                border: 1px solid {BORDER};
-                border-radius: 6px;
-            }}
-            QPushButton#CloseBtn {{
-                background-color: transparent;
-                color: {MUTED};
-                border: 1px solid {BORDER};
-                border-radius: 4px;
-                padding: 7px 20px;
-                font-size: 12px;
-                font-family: 'Segoe UI', 'Roboto', Arial;
-            }}
-            QPushButton#CloseBtn:hover {{
-                color: {TEXT};
-                border-color: {ACCENT};
-            }}
-        """)
-
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
         # ── Header ──────────────────────────────────────────────────────────
         header = QWidget()
+        header.setObjectName("HeaderBar")
         header.setFixedHeight(64)
-        header.setStyleSheet(
-            f"background-color: {CARD}; border-bottom: 1px solid {BORDER};"
-        )
         hlay = QHBoxLayout(header)
         hlay.setContentsMargins(24, 0, 24, 0)
 
         prefix = QLabel("// ")
-        prefix.setStyleSheet(f"color: {ACCENT}; font-size: 14px; font-weight: bold;")
+        prefix.setObjectName("SectionHeader")
         title = QLabel(f"TECHNISCHE DETAILS ZU ANCORATE {edition} {version}")
-        title.setStyleSheet(
-            f"color: {TEXT}; font-size: 14px; font-weight: bold; letter-spacing: 2px;"
-        )
+        title.setStyleSheet("font-size: 14px; font-weight: bold; letter-spacing: 2px;")
 
         hlay.addWidget(prefix)
         hlay.addWidget(title)
@@ -414,11 +364,9 @@ class DetailsDialog(QDialog):
             fl.setSpacing(10)
 
             t = QLabel(title_text.upper())
-            t.setStyleSheet(
-                f"color: {ACCENT}; font-size: 10px; font-weight: bold; letter-spacing: 2px;"
-            )
+            t.setObjectName("SectionHeader")
             fl.addWidget(t)
-            fl.addWidget(make_separator(BORDER))
+            fl.addWidget(make_separator())
 
             grid = QGridLayout()
             grid.setVerticalSpacing(8)
@@ -426,9 +374,9 @@ class DetailsDialog(QDialog):
             grid.setColumnStretch(1, 1)
             for i, (k, v) in enumerate(rows):
                 k_lbl = QLabel(k)
-                k_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+                k_lbl.setObjectName("MetaKey")
                 v_lbl = QLabel(v)
-                v_lbl.setStyleSheet(f"color: {TEXT}; font-size: 12px;")
+                v_lbl.setObjectName("MetaValue")
                 v_lbl.setWordWrap(True)
                 grid.addWidget(k_lbl, i, 0, Qt.AlignmentFlag.AlignTop)
                 grid.addWidget(v_lbl, i, 1)
@@ -480,15 +428,13 @@ class DetailsDialog(QDialog):
 
         # ── Footer ───────────────────────────────────────────────────────────
         footer = QWidget()
+        footer.setObjectName("Footer")
         footer.setFixedHeight(58)
-        footer.setStyleSheet(
-            f"background-color: {CARD}; border-top: 1px solid {BORDER};"
-        )
         flay = QHBoxLayout(footer)
         flay.setContentsMargins(24, 0, 24, 0)
 
         hint = QLabel(f"Build  {version}-{version_year}")
-        hint.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        hint.setObjectName("Copyright")
 
         btn = QPushButton("Schließen")
         btn.setObjectName("CloseBtn")
@@ -512,82 +458,8 @@ class AboutDialog(QDialog):
             self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
         )
 
-        # ── Farb-Palette (Hauptfenster-Design, dark_fixed.css) ──────────────
-        BG = "#0b0f16"
-        PANEL = "#0f1522"
-        BORDER = "rgba(255,255,255,0.08)"
-        ACCENT = "#2f7cf6"  # Blau – Primary-Button
-        ACCENT2 = "#2a78ff"  # Blau für Hover/Fokus
-        TEXT = "#e6eef8"
-        MUTED = "#9fb0d8"
-        SUBTLE = "#cfd8ea"
-        BTN_BG = "#0f1522"
-
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {BG};
-                font-family: 'Segoe UI Variable', 'Segoe UI', 'SF Pro Display', sans-serif;
-            }}
-
-            /* ─ Basis ─────────────────────────────────────────────── */
-            QWidget {{ background: transparent; }}
-            QScrollArea {{ border: none; }}
-
-            /* ─ Beschriftungen ────────────────────────────────────── */
-            QLabel                 {{ color: {TEXT}; }}
-            QLabel#AppName         {{ font-size: 22px; font-weight: 700; color: {TEXT}; letter-spacing: -0.5px; }}
-            QLabel#AppSub          {{ font-size: 12px; color: {MUTED}; letter-spacing: 0.5px; }}
-            QLabel#SectionHeader   {{ font-size: 10px; font-weight: 700; color: {ACCENT}; letter-spacing: 2px; }}
-            QLabel#MetaKey         {{ font-size: 12px; color: {MUTED}; }}
-            QLabel#MetaValue       {{ font-size: 12px; color: {TEXT}; font-weight: 500; }}
-            QLabel#DescText        {{ font-size: 12px; color: {SUBTLE}; line-height: 1.6; }}
-            QLabel#Copyright       {{ font-size: 11px; color: {MUTED}; }}
-
-            /* ─ Klickbarer Link ───────────────────────────────────── */
-            QLabel#DetailLink {{
-                font-size: 12px;
-                font-weight: 600;
-                color: {ACCENT};
-                text-decoration: underline;
-            }}
-            QLabel#DetailLink:hover {{
-                color: {TEXT};
-            }}
-
-            /* ─ Panel / Karte ─────────────────────────────────────── */
-            QFrame#Card {{
-                background-color: {PANEL};
-                border: 1px solid {BORDER};
-                border-radius: 8px;
-            }}
-
-            /* ─ Footer ────────────────────────────────────────────── */
-            QWidget#Footer {{
-                background-color: {PANEL};
-                border-top: 1px solid {BORDER};
-            }}
-
-            /* ─ Close-Button ──────────────────────────────────────── */
-            QPushButton#CloseBtn {{
-                background-color: {BTN_BG};
-                color: {SUBTLE};
-                border: 1px solid {BORDER};
-                border-radius: 8px;
-                padding: 9px 22px;
-                font-size: 13px;
-                font-weight: 600;
-            }}
-            QPushButton#CloseBtn:hover {{
-                background-color: #121a2b;
-                color: {TEXT};
-                border-color: {ACCENT2};
-            }}
-            QPushButton#CloseBtn:pressed {{
-                background-color: #0b1220;
-            }}
-        """)
-
-        # ── Root-Layout ───────────────────────────────────────────────────────
+        # ── Farbgebende Definitionen werden zentral in den Theme-Dateien
+        #    (standard-dark.css / standard-white.css) gepflegt. ──────────────
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -596,9 +468,7 @@ class AboutDialog(QDialog):
         # 1. HEADER  (Icon + Name + Subtitle)
         # ─────────────────────────────────────────────────────────────────────
         header = QWidget()
-        header.setStyleSheet(
-            f"background-color: {PANEL}; border-bottom: 1px solid {BORDER};"
-        )
+        header.setObjectName("HeaderBar")
         hlay = QHBoxLayout(header)
         hlay.setContentsMargins(28, 22, 28, 22)
         hlay.setSpacing(18)
@@ -608,12 +478,9 @@ class AboutDialog(QDialog):
         px = get_app_icon().pixmap(84, 84)
         if px.isNull():
             px = QPixmap(94, 94)
-            px.fill(QColor(ACCENT))
+            px.fill(QColor("#2f7cf6"))
         icon_lbl.setPixmap(px)
         icon_lbl.setFixedSize(94, 94)
-        icon_lbl.setStyleSheet(
-            f"border-radius: 10px; background-color: #111827; padding: 4px; border: 1px solid {BORDER};"
-        )
 
         # Name + Subtitle
         name_col = QVBoxLayout()
@@ -628,11 +495,7 @@ class AboutDialog(QDialog):
 
         # Version-Badge inline
         badge = QLabel(f"  v{version}  ")
-        badge.setStyleSheet(
-            f"background-color: #111827; color: {ACCENT}; font-size: 10px; "
-            f"font-weight: 700; border: 1px solid {ACCENT}; border-radius: 3px; "
-            f"padding: 1px 0; letter-spacing: 1px;"
-        )
+        badge.setObjectName("VersionBadge")
         badge.setFixedHeight(18)
 
         badge_row = QHBoxLayout()
@@ -670,7 +533,7 @@ class AboutDialog(QDialog):
         sec = QLabel("RELEASE-INFO")
         sec.setObjectName("SectionHeader")
         clay.addWidget(sec)
-        clay.addWidget(make_separator(BORDER))
+        clay.addWidget(make_separator())
 
         meta = QGridLayout()
         meta.setVerticalSpacing(9)
@@ -708,7 +571,7 @@ class AboutDialog(QDialog):
         link_row.setSpacing(6)
 
         arrow = QLabel("→")
-        arrow.setStyleSheet(f"color: {ACCENT}; font-size: 12px; font-weight: bold;")
+        arrow.setObjectName("DetailLink")
 
         link = QLabel("Technische Details & Spezifikationen anzeigen")
         link.setObjectName("DetailLink")
@@ -761,43 +624,7 @@ class TermsOfServiceDialog(QDialog):
         self.setMinimumSize(760, 720)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #121212;
-                color: #e0e0e0;
-            }
-            QLabel {
-                color: #e0e0e0;
-            }
-            QTextEdit {
-                background-color: #1e1e1e;
-                color: #f0f0f0;
-                border: 1px solid #333;
-                border-radius: 6px;
-                padding: 10px;
-                font-family: Consolas, monospace;
-                font-size: 12px;
-            }
-            QCheckBox {
-                color: #e0e0e0;
-                spacing: 8px;
-            }
-            QPushButton {
-                background-color: #2a2a2a;
-                color: #ffffff;
-                border: 1px solid #444;
-                border-radius: 6px;
-                padding: 6px 18px;
-            }
-            QPushButton:hover {
-                background-color: #3a3a3a;
-            }
-            QPushButton:disabled {
-                background-color: #1a1a1a;
-                color: #777;
-                border-color: #222;
-            }
-        """)
+        # Styling wird zentral über die Theme-Dateien übernommen.
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -813,7 +640,7 @@ class TermsOfServiceDialog(QDialog):
             f"Die Nutzung von ANCORATE {edition} setzt deren Zustimmung voraus."
         )
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setStyleSheet("color: #aaaaaa;")
+        subtitle.setObjectName("ReqInfo")
         layout.addWidget(subtitle)
 
         self.text_area = QTextEdit()
@@ -875,24 +702,15 @@ class WelcomeOverlay(QDialog):
         # Title
         # =========================
         self.title = QLabel("THIS IS ANCORATE.")
+        self.title.setObjectName("WelcomeTitle")
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.title.setStyleSheet(f"""
-            font-size: 56px;
-            font-weight: 900;
-            letter-spacing: 3px;
-            color: {ANCORATE_BLUE};
-        """)
 
         # =========================
         # Subtitle
         # =========================
         self.subtitle = QLabel("Secure · Local · Trusted")
+        self.subtitle.setObjectName("WelcomeSubtitle")
         self.subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.subtitle.setStyleSheet("""
-            font-size: 16px;
-            letter-spacing: 2px;
-            color: rgba(200, 215, 235, 180);
-        """)
 
         layout.addWidget(self.title)
         layout.addWidget(self.subtitle)

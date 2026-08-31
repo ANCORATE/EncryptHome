@@ -30,7 +30,7 @@ EncryptHome provides a graphical vault application built with PyQt6. The current
 - Changing the password of an existing vault
 - Auto-lock behavior
 - Configurable keyboard shortcuts
-- Dark and light application themes
+- Two Standard themes (Standard-dark / Standard-White) with central app-wide styling
 - Application integrity and update checks
 - Update news and changelog display
 - A settings window with General, Shortcuts, Design, and Updates sections
@@ -285,6 +285,17 @@ General settings currently include:
 - Emergency vault-deletion scanner
 
 The update system uses the configured update URL and can display release notes and changelog data.
+
+### Design & Themes
+
+EncryptHome ships two application themes:
+
+- **Standard-dark** (`utilities/themes/standard-dark.css`)
+- **Standard-White** (`utilities/themes/standard-white.css`)
+
+Both files are structurally identical (same selectors, properties and widget object names) and differ only in their light/dark color palettes, so the two themes render every part of the application consistently. All application styling is centralized in these two Qt stylesheet files — dialogs, the settings window, password dialogs, About/Details/News dialogs and the welcome overlay use object names that these themes style, instead of per-widget hardcoded colors.
+
+The active theme is stored in `settings.json` under the `theme` key (values `Standard-dark` or `Standard-White`, default `Standard-dark`) and is applied on startup and when changed in the **Design** tab. Unknown or legacy theme values from older versions are automatically normalized to `Standard-dark`.
 
 ---
 

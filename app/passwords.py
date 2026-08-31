@@ -38,6 +38,26 @@ from app.core import *
 # Passwort-Dialoge (aus main.py)
 # ============================================================
 
+def _set_requirement_label(label, ok: bool):
+    """Stellt das Anforderungs-Label auf erfüllt/nicht erfüllt um.
+
+    Die Farben kommen zentral aus der Theme-Datei (QLabel#Requirement),
+    gesteuert über die dynamische Qt-Eigenschaft `ok`. Dadurch sind keine
+    hartkodierten Farben im Dialogcode nötig.
+    """
+    label.setObjectName("Requirement")
+    label.setProperty("ok", ok)
+    style = label.style()
+    style.unpolish(label)
+    style.polish(label)
+
+
+def _make_requirement_label(text: str):
+    label = QLabel(f"◦ {text}")
+    label.setObjectName("Requirement")
+    label.setProperty("ok", False)
+    return label
+
 def change_container_password(container_path: str, current_master_key: bytes, current_meta: dict, current_password: str, current_flags: int, parent=None) -> bool:
     """
     Change password for existing container
@@ -62,7 +82,7 @@ def change_container_password(container_path: str, current_master_key: bytes, cu
         "Der Tresorinhalt bleibt erhalten. Das Ändern des Passworts aktualisiert die Verschlüsselungskeys, um die Sicherheit zu verbessern. Das kann bei großen Tresoren einige Zeit dauern."
     )
     info_label.setWordWrap(True)
-    info_label.setStyleSheet("color: #8a8f98; font-size: 11px;")
+    info_label.setObjectName("ReqInfo")
     layout.addWidget(info_label)
     
     # Store result for returning the new password
@@ -109,8 +129,7 @@ def change_container_password(container_path: str, current_master_key: bytes, cu
     ]
 
     for idx, (text, key) in enumerate(req_labels):
-        label = QLabel(f"◦ {text}")
-        label.setStyleSheet("color: #8a8f98; font-size: 11px;")
+        label = _make_requirement_label(text)
         req_widgets[key] = label
         req_group_layout.addWidget(label, idx // 2, idx % 2)
 
@@ -122,51 +141,33 @@ def change_container_password(container_path: str, current_master_key: bytes, cu
     # Update requirements as user types
     def update_requirements():
         password = new_pwd_input.text()
-        req_widgets["length"].setStyleSheet(
-            "color: #6ee7b7; font-size: 11px;"
-            if len(password) >= 8
-            else "color: #8a8f98; font-size: 11px;"
-        )
+
+        ok_len = len(password) >= 8
+        _set_requirement_label(req_widgets["length"], ok_len)
         req_widgets["length"].setText(
-            f"{'✓' if len(password) >= 8 else '◦'} Mindestens 8 Zeichen"
+            f"{'✓' if ok_len else '◦'} Mindestens 8 Zeichen"
         )
 
         has_upper = any(c.isupper() for c in password)
-        req_widgets["upper"].setStyleSheet(
-            "color: #6ee7b7; font-size: 11px;"
-            if has_upper
-            else "color: #8a8f98; font-size: 11px;"
-        )
+        _set_requirement_label(req_widgets["upper"], has_upper)
         req_widgets["upper"].setText(
             f"{'✓' if has_upper else '◦'} Mindestens 1 Großbuchstabe (A-Z)"
         )
 
         has_lower = any(c.islower() for c in password)
-        req_widgets["lower"].setStyleSheet(
-            "color: #6ee7b7; font-size: 11px;"
-            if has_lower
-            else "color: #8a8f98; font-size: 11px;"
-        )
+        _set_requirement_label(req_widgets["lower"], has_lower)
         req_widgets["lower"].setText(
             f"{'✓' if has_lower else '◦'} Mindestens 1 Kleinbuchstabe (a-z)"
         )
 
         has_digit = any(c.isdigit() for c in password)
-        req_widgets["digit"].setStyleSheet(
-            "color: #6ee7b7; font-size: 11px;"
-            if has_digit
-            else "color: #8a8f98; font-size: 11px;"
-        )
+        _set_requirement_label(req_widgets["digit"], has_digit)
         req_widgets["digit"].setText(
             f"{'✓' if has_digit else '◦'} Mindestens 1 Ziffer (0-9)"
         )
 
         has_special = any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in password)
-        req_widgets["special"].setStyleSheet(
-            "color: #6ee7b7; font-size: 11px;"
-            if has_special
-            else "color: #8a8f98; font-size: 11px;"
-        )
+        _set_requirement_label(req_widgets["special"], has_special)
         req_widgets["special"].setText(
             f"{'✓' if has_special else '◦'} Mindestens 1 Sonderzeichen (!@#$%^&*)"
         )
@@ -185,12 +186,6 @@ def change_container_password(container_path: str, current_master_key: bytes, cu
     change_btn.setMinimumWidth(150)
     cancel_btn.setMinimumWidth(120)
     change_btn.setObjectName("primary")
-    # change_btn.setStyleSheet(
-        #     "QPushButton { background: #2f7cf6; color: white; border: none; "
-        #     "border-radius: 6px; padding: 9px 18px; font-weight: 600; }"
-        #     "QPushButton:hover { background: #3f8cff; }"
-        #     "QPushButton:pressed { background: #2265d1; }"
-    # )
 
     btn_layout.addWidget(change_btn)
     btn_layout.addWidget(cancel_btn)
@@ -273,8 +268,8 @@ def get_password_with_requirements(parent, title="Passwort eingeben") -> tuple[s
     
     req_widgets = {}
     for text, key in req_labels:
-        label = QLabel(f"○ {text}")
-        label.setStyleSheet("color: #666; font-size: 11px; margin-left: 10px;")
+        label = _make_requirement_label(text)
+        label.setIndent(10)
         req_widgets[key] = label
         req_layout.addWidget(label)
     
@@ -287,46 +282,31 @@ def get_password_with_requirements(parent, title="Passwort eingeben") -> tuple[s
         is_valid, error_msg = validate_password_strength(password)
         
         # Update visual indicators
-        req_widgets["length"].setStyleSheet(
-            "color: #4CAF50; font-size: 11px; margin-left: 10px;" 
-            if len(password) >= 8 else "color: #666; font-size: 11px; margin-left: 10px;"
-        )
+        _set_requirement_label(req_widgets["length"], len(password) >= 8)
         req_widgets["length"].setText(
             f"{'✓' if len(password) >= 8 else '○'} Mindestens 8 Zeichen"
         )
         
         has_upper = any(c.isupper() for c in password)
-        req_widgets["upper"].setStyleSheet(
-            "color: #4CAF50; font-size: 11px; margin-left: 10px;" 
-            if has_upper else "color: #666; font-size: 11px; margin-left: 10px;"
-        )
+        _set_requirement_label(req_widgets["upper"], has_upper)
         req_widgets["upper"].setText(
             f"{'✓' if has_upper else '○'} Mindestens 1 Großbuchstabe (A-Z)"
         )
         
         has_lower = any(c.islower() for c in password)
-        req_widgets["lower"].setStyleSheet(
-            "color: #4CAF50; font-size: 11px; margin-left: 10px;" 
-            if has_lower else "color: #666; font-size: 11px; margin-left: 10px;"
-        )
+        _set_requirement_label(req_widgets["lower"], has_lower)
         req_widgets["lower"].setText(
             f"{'✓' if has_lower else '○'} Mindestens 1 Kleinbuchstabe (a-z)"
         )
         
         has_digit = any(c.isdigit() for c in password)
-        req_widgets["digit"].setStyleSheet(
-            "color: #4CAF50; font-size: 11px; margin-left: 10px;" 
-            if has_digit else "color: #666; font-size: 11px; margin-left: 10px;"
-        )
+        _set_requirement_label(req_widgets["digit"], has_digit)
         req_widgets["digit"].setText(
             f"{'✓' if has_digit else '○'} Mindestens 1 Ziffer (0-9)"
         )
         
         has_special = any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in password)
-        req_widgets["special"].setStyleSheet(
-            "color: #4CAF50; font-size: 11px; margin-left: 10px;" 
-            if has_special else "color: #666; font-size: 11px; margin-left: 10px;"
-        )
+        _set_requirement_label(req_widgets["special"], has_special)
         req_widgets["special"].setText(
             f"{'✓' if has_special else '○'} Mindestens 1 Sonderzeichen (!@#$%^&*)"
         )

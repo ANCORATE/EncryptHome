@@ -86,6 +86,8 @@ DEFAULT_SETTINGS = {
 
 # ------------------ Settings laden / speichern ------------------
 
+VALID_THEMES = ("Standard-dark", "Standard-White")
+
 
 def load_settings():
     path = SETTINGS_FILE
@@ -101,6 +103,10 @@ def load_settings():
     for k, v in DEFAULT_SETTINGS.items():
         if k not in data:
             data[k] = v
+
+    # Alte/entfernte Theme-Werte sicher auf einen gültigen migrieren
+    if data.get("theme") not in VALID_THEMES:
+        data["theme"] = DEFAULT_SETTINGS["theme"]
     return data
 
 
@@ -239,7 +245,7 @@ class SettingsDialog(QDialog):
 
         # --- Titel ---
         title = QLabel("Allgemeine Systemeinstellungen")
-        title.setStyleSheet("font-weight: bold; font-size: 18px; color: #ffffff;")
+        title.setStyleSheet("font-weight: bold; font-size: 18px;")
         layout.addWidget(title)
 
         # --- Sektion 1: Programmverhalten (QGroupBox) ---
@@ -436,12 +442,7 @@ class SettingsDialog(QDialog):
         self.theme_combo.addItems(
             [
                 "Standard-dark",
-                "Standard-light",
-                "Quantum",
-                "Precision-light",
-                "Precision-dark",
-                "Hackers-dark",
-                "Cyber-blue",
+                "Standard-White",
             ]
         )
         self.theme_combo.setCurrentText(self.data.get("theme", "Standard-dark"))
@@ -468,16 +469,13 @@ class SettingsDialog(QDialog):
         self.changelog_text = QTextEdit()
         self.changelog_text.setReadOnly(True)
         self.changelog_text.setPlaceholderText("Lade Informationen...")
-        self.changelog_text.setStyleSheet(
-            "background-color: #2b2b2b; color: #e0e0e0; border: 1px solid #555;"
-        )
         group_layout.addWidget(self.changelog_text)
 
         self.changelog_group.setLayout(group_layout)
         layout.addWidget(self.changelog_group, 1)  # Expandiert
 
         self.update_status_label = QLabel("Update-Status: noch nicht geprüft")
-        self.update_status_label.setStyleSheet("color: #c0c0c0; font-size: 13px;")
+        self.update_status_label.setObjectName("ReqInfo")
         layout.addWidget(self.update_status_label)
 
         # Update Buttons

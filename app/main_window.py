@@ -116,6 +116,10 @@ class App(QWidget):
 
         self.file_list.itemDoubleClicked.connect(self.preview_selected)
 
+        # Live-Suche: textChanged feuert im GUI-Thread, sodass keine
+        # Qt-Widgets aus einem Hintergrund-Thread angesprochen werden.
+        self.search.textChanged.connect(self.start_search)
+
         # --- Shortcut Verbindungen ---
         self.create_vault_sc.activated.connect(lambda: self.choose_container(2))
         self.add_sec_sc.activated.connect(self.add_file_dialog)
@@ -460,16 +464,11 @@ class App(QWidget):
         try:
             base_path = os.path.dirname(os.path.abspath(sys.argv[0]))
             THEMES = {
-                "Standard-light": "utilities/themes/light.css",
-                "Standard-dark": "utilities/themes/dark_fixed.css",
-                "Quantum": "utilities/themes/quantum.css",
-                "Precision-light": "utilities/themes/precision-light.css",
-                "Precision-dark": "utilities/themes/precision-dark.css",
-                "Hackers-dark": "utilities/themes/hackers-dark.css",
-                "Cyber-blue": "utilities/themes/cyber-blue.css",
+                "Standard-dark": "utilities/themes/standard-dark.css",
+                "Standard-White": "utilities/themes/standard-white.css",
             }
             
-            css_file = THEMES.get(theme_name, "utilities/themes/dark_fixed.css")
+            css_file = THEMES.get(theme_name, "utilities/themes/standard-dark.css")
             css_path = os.path.join(base_path, css_file)
             
             if os.path.exists(css_path):
@@ -1602,40 +1601,14 @@ Mögliche Ursache
         self.refresh_list(True)
     
     def keep_search(self):
-        """Suchleiste am Leben erhalten"""
-        try:
-            # Warte bis GUI vollständig initialisiert ist
-            max_wait = 20  # Maximal 20 Sekunden warten
-            wait_count = 0
-            
-            while wait_count < max_wait:
-                if hasattr(self, 'search') and self.search is not None:
-                    break
-                time.sleep(0.5)
-                wait_count += 1
-                print(f"[SEARCH] Warte auf GUI... {wait_count * 0.5}s")
-            
-            if not hasattr(self, 'search') or self.search is None:
-                print("[SEARCH] GUI nach Wartezeit nicht verfügbar - beende keep_search")
-                return
-                
-            print("[SEARCH] GUI verfügbar - starte Suchüberwachung")
-            self.searchbar_content = ""
-            while True:
-                try:
-                    if hasattr(self, 'search') and self.search and self.search.text() != self.searchbar_content:
-                        self.start_search()
-                        self.searchbar_content = self.search.text()
-                    time.sleep(0.2)
-                except RuntimeError:
-                    # GUI wurde zerstört, beende Thread
-                    print("[SEARCH] GUI nicht mehr verfügbar - beende keep_search")
-                    break
-                except Exception as e:
-                    print(f"[SEARCH] Fehler in keep_search: {e}")
-                    break
-        except Exception as e:
-            print(f"[SEARCH] Thread-Fehler: {e}")
+        """Suchleiste am Leben erhalten (Kompatibilitäts-Stub).
+
+        Die Live-Suche wird über das textChanged-Signal des QLineEdit im
+        GUI-Thread ausgelöst (siehe __init__). Diese Methode greift deshalb
+        NICHT mehr auf Qt-Widgets aus einem Hintergrund-Thread zu, um
+        Race-Conditions und Qt-Cross-Thread-Fehler zu vermeiden.
+        """
+        return
 
     # ------------------ Dateiliste aktualisieren ------------------
     def refresh_list(self, searching: bool = False, intelligence_results=None):

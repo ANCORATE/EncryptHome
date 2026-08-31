@@ -254,7 +254,20 @@ class SaltScannerUI(QWidget):
 
 def load_stylesheet(app):
     try:
-        with open("themes/dark.css", "r", encoding="utf-8") as f:
+        import json
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        theme = "Standard-dark"
+        settings_path = os.path.join(os.path.expanduser("~"), ".ancorate", "settings.json")
+        if os.path.exists(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                theme = data.get("theme", theme)
+        themes = {
+            "Standard-dark": "themes/standard-dark.css",
+            "Standard-White": "themes/standard-white.css",
+        }
+        css_file = themes.get(theme, "themes/standard-dark.css")
+        with open(os.path.join(base_dir, css_file), "r", encoding="utf-8") as f:
             app.setStyleSheet(f.read())
     except FileNotFoundError:
         print("running bare-metal")

@@ -88,23 +88,27 @@ RECENT_CONTAINERS_FILE = os.path.join(CONFIG_DIR, "recent_containers.json")
 def get_app_icon():
     """
     Lädt das passende Icon-Format für die aktuelle Plattform.
+    Relative Pfade werden gegen das App-Verzeichnis aufgelöst, damit das
+    Icon auch dann gefunden wird, wenn das Arbeitsverzeichnis abweicht.
     """
     system = platform.system()
+
+    base = os.path.dirname(os.path.abspath(sys.argv[0]))
     
     # Verschiedene Icon-Formate versuchen
     icon_paths = []
     
     if system == "Windows":
         icon_paths = [
-            "utilities/icon.ico",
-            "utilities/icon.png",
+            os.path.join(base, "utilities", "icon.ico"),
+            os.path.join(base, "utilities", "icon.png"),
         ]
     else:
         icon_paths = [
-            "utilities/icon.png",
-            "utilities/icon_64x64.png",
-            "utilities/icon_48x48.png",
-            "utilities/icon_32x32.png",
+            os.path.join(base, "utilities", "icon.png"),
+            os.path.join(base, "utilities", "icon_64x64.png"),
+            os.path.join(base, "utilities", "icon_48x48.png"),
+            os.path.join(base, "utilities", "icon_32x32.png"),
         ]
     
     # Erstes existierendes Icon zurückgeben
@@ -707,11 +711,13 @@ class notifier:
 
 
 # Einfachen trennenden Strich erzeugen - wird in DetailsDialog verwendet
-def make_separator(color="#2a2c32"):
+def make_separator(color=None):
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
     line.setFixedHeight(1)
-    line.setStyleSheet(f"background-color: {color}; border: none;")
+    line.setObjectName("HSep")
+    if color:
+        line.setStyleSheet(f"background-color: {color}; border: none;")
     return line
 
 def load_theme_setting():
@@ -735,18 +741,15 @@ base_path = os.path.dirname(os.path.abspath(sys.argv[0]))
 # ---------------------------------------------------------
 theme = load_theme_setting()
 
+DEFAULT_THEME = "Standard-dark"
+
 THEMES = {
-    "Standard-light": "utilities/themes/light.css",
-    "Standard-dark": "utilities/themes/dark_fixed.css",
-    "Quantum": "utilities/themes/quantum.css",
-    "Precision-light": "utilities/themes/precision-light.css",
-    "Precision-dark": "utilities/themes/precision-dark.css",
-    "Hackers-dark": "utilities/themes/hackers-dark.css",
-    "Cyber-blue": "utilities/themes/cyber-blue.css",
+    "Standard-dark": "utilities/themes/standard-dark.css",
+    "Standard-White": "utilities/themes/standard-white.css",
 }
 
-# Default auf dark
-css_file = THEMES.get(theme, "utilities/themes/dark_fixed.css")
+# Default auf dark (Fallback für unbekannte/alte Theme-Werte)
+css_file = THEMES.get(theme, THEMES[DEFAULT_THEME])
 css_path = os.path.join(base_path, css_file)
 
 # ---------------------------------------------------------

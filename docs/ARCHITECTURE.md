@@ -176,7 +176,7 @@ The implementation is authoritative for the exact binary layout. Changes to this
 
 ### `utilities/settings.py`
 
-Application settings, settings UI, shortcuts and theme configuration.
+Application settings, settings UI, shortcuts and theme configuration. Only two themes are available (`Standard-dark` / `Standard-White`), both defined centrally in `utilities/themes/standard-*.css` and applied app-wide; legacy theme values are migrated to `Standard-dark`.
 
 ### `utilities/header_utils.py`
 
