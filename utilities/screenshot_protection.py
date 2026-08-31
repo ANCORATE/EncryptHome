@@ -1,13 +1,12 @@
-"""Windows screenshot/capture protection for EncryptHome windows.
+"""Optional screenshot/capture protection for EncryptHome Qt windows.
 
-The helper is deliberately optional and dependency-free outside PyQt6. On
-non-Windows platforms it is a no-op so existing cross-platform behavior is
-preserved.
+Windows-only implementation. On Linux and macOS this module is safe to
+import and all public operations are no-ops. The vault and encryption code
+are not involved.
 """
 
 from __future__ import annotations
 
-import ctypes
 import platform
 from typing import Any
 
@@ -18,24 +17,17 @@ _WDA_EXCLUDEFROMCAPTURE = 0x00000011
 
 
 def protect_window_from_capture(window: Any) -> bool:
-    """Exclude a native window from supported Windows screen capture APIs.
-
-    Returns True when Windows accepted the requested affinity and False when
-    protection is unavailable or could not be applied. On non-Windows
-    platforms this function is intentionally a no-op and returns False.
-    """
+    """Apply Windows capture exclusion to one Qt window when supported."""
     if platform.system() != "Windows":
         return False
 
     try:
+        import ctypes
+
         hwnd = int(window.winId())
-    except (AttributeError, TypeError, ValueError):
-        return False
+        if not hwnd:
+            return False
 
-    if not hwnd:
-        return False
-
-    try:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         set_window_display_affinity = user32.SetWindowDisplayAffinity
         set_window_display_affinity.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
@@ -53,10 +45,7 @@ class _CaptureProtectionFilter(QObject):
     """Apply capture protection when EncryptHome creates/shows a Qt window."""
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if event.type() in (
-            QEvent.Type.Show,
-            QEvent.Type.WindowActivate,
-        ):
+        if event.type() in (QEvent.Type.Show, QEvent.Type.WindowActivate):
             try:
                 protect_window_from_capture(watched)
             except Exception:
@@ -69,11 +58,7 @@ _capture_protection_filter: _CaptureProtectionFilter | None = None
 
 
 def install_screenshot_protection(application: Any) -> None:
-    """Install capture protection for all Qt top-level windows.
-
-    Installation is idempotent. On non-Windows platforms the function does
-    nothing, preserving the existing behavior completely.
-    """
+    """Install optional Windows capture protection for Qt top-level windows."""
     global _capture_protection_filter
 
     if platform.system() != "Windows":
