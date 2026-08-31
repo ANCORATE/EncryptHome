@@ -1,155 +1,126 @@
 # EncryptHome Developer Documentation
 
-Welcome to the EncryptHome developer documentation. This section contains comprehensive technical documentation for developers working on the ANCORATE EncryptHome project.
+Developer documentation for the ANCORATE EncryptHome desktop application.
 
-## About EncryptHome
+## Current codebase
 
-EncryptHome is a security-focused desktop application designed to securely store, manage, and protect user data through strong encryption based on device-bound authentication and reliable software architecture.
+- **Entry point:** `main.py`
+- **Application UI:** PyQt6
+- **Language:** Python 3
+- **Edition:** EncryptHome Citadel
+- **Container:** `.salt`
+- **License:** Proprietary — © 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
 
-**Version**: 26.2  
-**Edition**: EncryptHome Citadel  
-**Language**: Python 3 with PyQt6  
-**License**: Proprietary - © 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin
+`main.py` remains the public entry point. It re-exports symbols from the `app` package so existing imports such as `from main import ...` remain valid.
 
-## Documentation Structure
+## Documentation
 
-### Core Documentation
-- **[Architecture](ARCHITECTURE.md)** - System architecture, component design, and data flow
-- **[Security](SECURITY.md)** - Security model, cryptographic implementation, and threat analysis
-- **[API Reference](API_REFERENCE.md)** - Complete API documentation for all modules
-- **[Development Guide](DEVELOPMENT.md)** - Development setup, build process, and testing
-- **[Contributing](CONTRIBUTING.md)** - Contribution guidelines and coding standards
+- [Architecture](ARCHITECTURE.md) — current module structure and runtime flows
+- [Security](SECURITY.md) — cryptographic and security model
+- [API Reference](API_REFERENCE.md) — public code interfaces documented here
+- [Development Guide](DEVELOPMENT.md) — setup, build and development workflow
+- [Contributing](CONTRIBUTING.md) — project contribution rules
 
-### Quick Links
-- [Project Overview](#project-overview)
-- [Getting Started](#getting-started)
-- [Key Components](#key-components)
-- [Security Architecture](#security-architecture)
+## Current feature set
 
-## Project Overview
+The current code implements:
 
-EncryptHome implements a vault-based encryption system with the following key features:
+- `.salt` vault creation, opening and updating
+- password-based key derivation with optional device binding
+- AES-256-GCM file encryption
+- encrypted vault metadata
+- per-file subkey derivation with HKDF-SHA256
+- HMAC-SHA256 integrity checks for encrypted file blobs and metadata
+- file add, export and batch export
+- drag-and-drop file input
+- in-memory file preview with an LRU cache
+- configurable application settings and themes
+- header validation and repair helpers
+- startup integrity/checksum verification
+- background update checking
+- emergency `.salt` vault scanning/deletion
+- LAN discovery/sharing functionality in the main application
+- device registration and device-based login
+- password change with container re-encryption
+- secure deletion methods
 
-### Core Features
-- **Device-Bound Encryption**: Optional hardware-based security using device fingerprinting
-- **Strong Cryptography**: AES-256-GCM with Argon2id key derivation
-- **Secure Vault Format**: Custom .salt container format with integrity verification
-- **Cross-Platform**: Support for Windows, Linux, and macOS
-- **User-Friendly GUI**: PyQt6-based interface with drag-and-drop support
-- **File Preview**: In-memory encrypted file preview system
-- **Secure Deletion**: Multiple secure file deletion methods
+### Windows screenshot protection
 
-### Security Priorities
-1. Security
-2. Reliability
-3. Compatibility
-4. Maintainability
-5. User Experience
+The current EncryptHome 27 development work also includes an optional Windows-only screenshot/capture protection layer. It uses the Windows `SetWindowDisplayAffinity` API with `WDA_EXCLUDEFROMCAPTURE` for EncryptHome-owned Qt windows.
 
-## Getting Started
+On Linux and macOS the protection layer is a no-op. It does not alter the vault format or cryptographic operations.
 
-### Prerequisites
-- Python 3.10 or higher
-- PyQt6
-- argon2-cffi
-- cryptography
-- requests
+This protection does **not** claim to block every possible capture method and does not automatically protect windows owned by external applications such as Microsoft Word.
 
-### Installation
-```bash
-# Install dependencies
-pip install PyQt6 argon2-cffi cryptography requests
+## Architecture at a glance
 
-# Run the application
-python main.py
+```text
+main.py
+  │
+  ├── app.core
+  ├── app.passwords
+  ├── app.workers
+  ├── app.dialogs
+  └── app.main_window
+        │
+        ├── encryption/decryption modules
+        ├── preview subsystem
+        └── utility modules
 ```
 
-See [Development Guide](DEVELOPMENT.md) for detailed setup instructions.
+### Core modules
 
-## Key Components
-
-### Encryption Engine
-- **base.py** - Cryptographic primitives and key derivation
-- **encrypt.py** - File and metadata encryption operations
-- **decrypt.py** - Decryption operations and blob handling
-- **decrypt_preview.py** - In-memory preview functionality
-
-### User Interface
-- **main.py** - Main application with GUI orchestration
-- **utilities/settings.py** - Settings management and configuration UI
+- `base.py` — cryptographic primitives and key derivation
+- `encrypt.py` — file and metadata encryption
+- `decrypt.py` — file/blob decryption
+- `decrypt_preview.py` — in-memory preview
+- `app/core.py` — shared application helpers and constants
+- `app/passwords.py` — password and password-change dialogs/helpers
+- `app/workers.py` — background encryption/export/update workers
+- `app/dialogs.py` — application dialogs and widgets
+- `app/main_window.py` — `App` main window and application behavior
 
 ### Utilities
-- **utilities/header_utils.py** - Container header validation and repair
-- **utilities/checksum_check.py** - File integrity verification
-- **utilities/sos_delete.py** - Emergency vault scanner/wiper (finds and deletes .salt vaults)
-- **utilities/updater.py** - Application update mechanism
 
-## Security Architecture
+- `utilities/settings.py` — settings and settings UI
+- `utilities/header_utils.py` — container header validation/repair
+- `utilities/checksum_check.py` — application integrity/checksum handling
+- `utilities/sos_delete.py` — emergency `.salt` vault scanner/wiper
+- `utilities/updater.py` — update-related functionality
+- `utilities/screenshot_protection.py` — optional Windows capture protection
 
-### Encryption Stack
-```
-Password + Project Pepper
-    ↓
-Argon2id (t=3, m=128MB, p=4)
-    ↓
-Password-derived key (32 bytes)
-    ↓
-Combine with Device Key hash (device-bound only)
-    ↓
-HKDF-SHA256 → Master Key (32 bytes)
-    ↓
-HKDF-SHA256 (per-file, salt=file nonce, info=filename)
-    ↓
-File Subkey (32 bytes)
-    ↓
+## Cryptographic data flow
+
+```text
+Password
+   │
+   ├── project pepper
+   ↓
+Argon2id
+   ↓
+Password-derived key
+   │
+   ├── optional device key binding
+   ↓
+HKDF-SHA256
+   ↓
+Master key
+   ↓
+Per-file HKDF-SHA256 subkey
+   ↓
 AES-256-GCM
-    ↓
-Encrypted File
+   ↓
+Encrypted file blob
 ```
 
-### Device Binding
-- MAC address (6 bytes)
-- CPU ID (platform-specific)
-- Disk serial (platform-specific)
-- SHA-256 fingerprint
-- Deterministic device key generation
+The exact implementation and current constants are documented in [SECURITY.md](SECURITY.md) and should be treated as authoritative over this overview.
 
-### Container Format
-```
-[Header 28B][File Blob 1][File Blob 2]...[Meta Length 8B][Encrypted Meta]
-```
+## Development principle
 
-See [Security Documentation](SECURITY.md) for complete security details.
-
-## Development Workflow
-
-### Code Standards
-- Follow existing code style and conventions
-- Maintain security-first approach
-- Write clear, single-purpose functions
-- Document security-critical code
-- Test all meaningful changes
-
-### Testing
-- Verify encryption/decryption operations
-- Test device binding functionality
-- Validate container format compatibility
-- Check memory management
-- Test error handling
-
-### Release Process
-1. Update version numbers
-2. Run full test suite
-3. Verify checksums
-4. Update documentation
-5. Create distribution package
-
-## Support
-
-For technical questions or issues, refer to the project maintainers.
+Documentation should describe the code that exists, not planned features. If implementation and documentation differ, update the documentation or the implementation before release.
 
 ## License
 
-This code is proprietary software. Unauthorized reproduction, reuse, modification, or distribution is strictly prohibited.
+This is proprietary software. Unauthorized reproduction, reuse, modification, or distribution is prohibited.
 
-© 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
+© 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
