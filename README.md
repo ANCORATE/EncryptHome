@@ -1,298 +1,375 @@
-# EncryptHome
+# ANCORATE EncryptHome
 
-<div align="center">
+**EncryptHome 26.2 — Citadel**
 
-**Secure Device-Bound Encryption Software**
+A local desktop application for encrypted `.salt` vaults, file management, device binding, file preview, secure deletion, and vault integrity checks.
 
-Version 26.2 | EncryptHome Citadel
-
-© 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin
-
-</div>
+Copyright © 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
 
 ---
 
-## Overview
+## What EncryptHome currently does
 
-EncryptHome is a security-focused desktop application for securely storing, managing, and protecting user data with strong encryption, optional device binding, and integrity verification.
+EncryptHome provides a graphical vault application built with PyQt6. The current codebase supports:
 
-### Current Features
+- Creating and opening `.salt` containers
+- Password-protected vault access
+- Optional device-bound vaults
+- Adding files to a vault
+- Drag-and-drop file import
+- Selecting multiple files
+- Exporting one or multiple selected files
+- Exporting all files
+- Deleting files from a vault
+- Deleting a vault/container
+- Searching vault contents
+- Recent-container history (up to 10 entries)
+- In-memory file preview with a bounded LRU cache
+- Configurable secure-deletion methods
+- Optional deletion of source files after successful encryption
+- Changing the password of an existing vault
+- Auto-lock behavior
+- Configurable keyboard shortcuts
+- Dark/light application themes
+- Application integrity/update checks
+- Update news and changelog display
+- A settings window with General, Shortcuts, Design, and Updates sections
+- Technical details and About dialogs
+- A local emergency vault-deletion scanner
 
-- **AES-256-GCM encryption** with authenticated encryption
-- **Argon2id key derivation** with a 128 MB memory cost
-- **HKDF-SHA256 per-file subkeys**
-- **Optional device-bound vaults** using a hardware fingerprint
-- **Custom `.salt` vault containers** with versioned headers
-- **Encrypted metadata** for the vault file list
-- **HMAC-SHA256 integrity verification** for encrypted blobs and metadata
-- **Application checksum verification**
-- **In-memory file preview** without writing preview plaintext to disk
-- **Secure deletion** with configurable overwrite methods
-- **Drag-and-drop file import**
-- **File search** inside the vault
-- **Recent containers**
-- **Configurable keyboard shortcuts**
-- **Light and dark themes**
-- **Auto-lock support**
-- **Cross-platform design** for Windows, Linux, and macOS
+The current GUI also contains LAN-sharing infrastructure in the `App` class. It defines UDP discovery and TCP transfer ports for ANCORATE LAN functionality.
 
-## Quick Start
+## Current version
 
-### Prerequisites
+The code identifies itself as:
 
-- Python 3.10 or higher
-- PyQt6
-- argon2-cffi
-- cryptography
-- requests
-
-### Installation
-
-```bash
-pip install PyQt6 argon2-cffi cryptography requests
+```text
+EncryptHome 26.2
+Edition: EncryptHome
+Codename: Citadel
+Container version: 0x09
 ```
 
-### Run
+`main.py` is the application entry point. It re-exports the application modules so existing imports from `main` continue to work. fileciteturn8file0
+
+---
+
+## Cryptography
+
+The current implementation uses the Python `cryptography` package for AES-GCM, HKDF, HMAC, and related primitives.
+
+### File encryption
+
+Each encrypted file uses:
+
+- A random 16-byte file nonce
+- A random 12-byte AES-GCM nonce
+- A per-file 32-byte subkey derived with HKDF-SHA256
+- AES-GCM encryption
+- An HMAC-SHA256 value over the ciphertext
+
+Files are processed in **128 KiB chunks**. fileciteturn14file0 fileciteturn18file0
+
+### Metadata encryption
+
+Vault metadata is serialized as JSON and encrypted with AES-GCM. The encrypted metadata also receives an HMAC-SHA256 value. fileciteturn14file0
+
+### Important implementation detail
+
+The per-file HKDF currently uses the file nonce as its salt and the UTF-8 encoded filename as its HKDF `info` value. The resulting 32-byte key is used for AES-256-GCM. fileciteturn18file0
+
+---
+
+## Device binding
+
+Device-bound vaults use a runtime-generated device key.
+
+The current device fingerprint is built from:
+
+- MAC address
+- CPU information
+- Disk information
+
+Those values are hashed with SHA-256. A deterministic device key is then derived from that fingerprint. The key is generated at runtime rather than being stored as a persistent key file. fileciteturn19file0
+
+The application also keeps a local registration marker to determine whether the device has already completed the initial registration flow. fileciteturn19file0
+
+---
+
+## Passwords
+
+Password input has live requirements for:
+
+- At least 8 characters
+- At least one uppercase letter
+- At least one lowercase letter
+- At least one digit
+- At least one special character
+
+The same validation is used when changing an existing vault password. fileciteturn13file0
+
+Changing a vault password re-encrypts the vault's file data with newly derived key material. The implementation is designed to leave the existing container unchanged if the re-key operation fails before the new container can be written. fileciteturn19file0
+
+---
+
+## `.salt` container
+
+The current container header is defined as:
+
+```text
+Magic       4 bytes   ANC0
+Version     1 byte    0x09
+Flags       1 byte
+Salt        16 bytes
+Reserved    6 bytes
+```
+
+The resulting header size is **28 bytes**. The defined flags are:
+
+```text
+0x01  Device-bound vault
+0x02  Keyfile flag
+0x04  EncryptPro vault flag
+```
+
+The current implementation therefore reserves space for these flags, although the legacy keyfile decryption helper is marked unused in `decrypt.py`. fileciteturn19file0 fileciteturn15file0
+
+A file blob contains:
+
+```text
+16-byte file nonce
+12-byte GCM nonce
+ciphertext
+16-byte GCM tag
+32-byte HMAC-SHA256
+```
+
+The vault stores encrypted metadata together with its length at the end of the container. fileciteturn14file0 fileciteturn12file0
+
+---
+
+## Integrity checks
+
+The code verifies encrypted data with multiple mechanisms:
+
+- AES-GCM authentication
+- HMAC-SHA256 verification for file ciphertext
+- HMAC-SHA256 verification for metadata
+- Container/header validation during vault access
+- Application checksum/update infrastructure
+
+When file HMAC or AES-GCM verification fails during export/decryption, the application reports the vault as having an invalid password or damaged data instead of accepting the unauthenticated plaintext. fileciteturn15file0
+
+---
+
+## File preview
+
+EncryptHome supports file preview through a dedicated preview worker and an in-memory cache in the main application.
+
+The current `App` implementation keeps preview data in an LRU cache with a total cache limit of **200 MiB** and applies a maximum preview-file size from `decrypt_preview.py`. fileciteturn10file0
+
+---
+
+## Secure deletion
+
+The Settings dialog currently exposes these deletion choices:
+
+- Standard (Schnell)
+- DoD 5220.22-M (3x)
+- Gutmann (35x)
+- ANCORATE Vaporizer 1 (100x)
+- ANCORATE Furnace Max (200x, large files)
+- ANCORATE Shatterer Ultra (300x; marked in the UI as not for HDD use)
+
+The settings also include an option to delete the original source file after successful encryption. fileciteturn16file0
+
+EncryptHome also exposes an emergency function for scanning/deleting vaults through `SaltScannerUI`. fileciteturn16file0
+
+---
+
+## Vault and file operations
+
+The main window currently provides menu actions for:
+
+### File
+
+- New vault
+- Open vault
+- Recent containers
+- Change vault password
+- Close vault
+- Delete vault
+- Settings
+
+### Edit
+
+- Add files
+- Start file preview
+- Delete selected file(s)
+- Export selected file(s)
+- Export all files
+
+### Help
+
+- About EncryptHome
+
+The file list supports extended selection and accepts dropped local files. Double-clicking an entry starts its preview. fileciteturn10file0 fileciteturn11file0
+
+---
+
+## Export and encryption workers
+
+Long-running operations use Qt workers/signals.
+
+The current code contains:
+
+- `AddWorker` for encrypting files into an existing vault
+- `ExportWorker` for exporting one file
+- `ExportBatchWorker` for exporting multiple files
+- `StartupUpdateWorker` for background update checks
+
+The add worker supports progress reporting, cancellation through a `threading.Event`, and removal of source files after successful encryption when that setting is enabled. fileciteturn12file0
+
+---
+
+## Recent containers
+
+EncryptHome stores recent container information locally and keeps the most recent **10** entries.
+
+Each entry contains the container path, container name, and last-accessed timestamp. The UI allows opening a recent container or clearing the recent-container list. fileciteturn19file0 fileciteturn10file0
+
+---
+
+## Auto-lock and runtime cleanup
+
+The main window initializes a **5-minute auto-lock timeout** and runs a periodic cleanup timer every **10 seconds**. The cleanup invokes Python garbage collection. fileciteturn10file0
+
+---
+
+## Keyboard shortcuts
+
+The default shortcuts currently defined by the application are:
+
+| Action | Default |
+|---|---|
+| Create vault | `Ctrl+N` |
+| Open vault | `Ctrl+O` |
+| Add files | `Ctrl++` |
+| Export selected | `Ctrl+E` |
+| Export all | `Alt+E` |
+| Delete selected | `Del` |
+| Delete vault/container | `Alt+Del` |
+| Search | `Return` |
+| Recent containers | `Ctrl+R` |
+
+The Settings dialog allows these shortcuts to be edited with Qt's `QKeySequenceEdit`. fileciteturn10file0 fileciteturn16file0
+
+---
+
+## Settings
+
+The current Settings dialog has four categories:
+
+1. **Allgemein**
+2. **Kurzbefehle**
+3. **Design**
+4. **Updates**
+
+General settings currently include:
+
+- Confirm before exiting
+- Delete the original source after successful encryption
+- Secure deletion method
+- Temporary-cache cleanup
+- Immediate application exit
+- Emergency vault deletion scanner
+
+The update system uses the configured update URL and can display release notes/changelog data. fileciteturn16file0
+
+---
+
+## Application startup
+
+On startup, EncryptHome:
+
+1. Generates the runtime device key.
+2. Checks whether the device has already been registered.
+3. For a new device, shows the welcome flow, Terms of Service, and login/setup flow.
+4. For an already registered device, opens the main window directly.
+5. Starts the background update check.
+
+The startup flow is implemented in `main.py`. fileciteturn8file0
+
+---
+
+## Project structure
+
+The current codebase is split into application modules while retaining `main.py` as the public entry point:
+
+```text
+EncryptHome/
+├── main.py
+├── base.py
+├── encrypt.py
+├── decrypt.py
+├── decrypt_preview.py
+├── app/
+│   ├── core.py
+│   ├── passwords.py
+│   ├── workers.py
+│   ├── dialogs.py
+│   └── main_window.py
+├── utilities/
+│   ├── settings.py
+│   ├── header_utils.py
+│   ├── checksum_check.py
+│   ├── updater.py
+│   ├── sos_delete.py
+│   └── themes/
+├── docs/
+└── README.md
+```
+
+`main.py` imports and re-exports the application components from `app/`, while `app/main_window.py` contains the main `App` class. fileciteturn8file0 fileciteturn10file0
+
+---
+
+## Dependencies visible in the current implementation
+
+The application imports and uses:
+
+- Python
+- PyQt6
+- `cryptography`
+- `argon2-cffi`
+- `requests`
+
+The exact versions are not fixed by the application source shown here, so this README does not claim specific library versions.
+
+---
+
+## Development
+
+Run the application through its Python entry point:
 
 ```bash
 python main.py
 ```
 
-### Basic Usage
-
-1. **Create a Vault** with `Ctrl+N`.
-2. **Open a Vault** with `Ctrl+O`.
-3. **Add Files** with drag and drop or `Ctrl++`.
-4. **Preview Files** by double-clicking a file.
-5. **Export Files** with `Ctrl+E`.
-6. **Search** for files with the search bar.
-7. **Delete Files** with `Del`.
-8. **Lock/close the vault** when finished.
-
-## Security Architecture
-
-EncryptHome uses a layered cryptographic design:
-
-```text
-Password
-   ↓
-Project Pepper
-   ↓
-Argon2id
-   ↓
-Password-derived Key
-   ↓
-Device Key (when device binding is enabled)
-   ↓
-HKDF-SHA256
-   ↓
-Master Key
-   ↓
-Per-file HKDF-SHA256 Subkey
-   ↓
-AES-256-GCM
-```
-
-### Cryptographic Parameters
-
-- **Argon2id:** time cost 3, memory cost 131072 KiB (128 MB), parallelism 4, output 32 bytes
-- **AES-256-GCM:** 256-bit key, 12-byte nonce, 16-byte authentication tag
-- **HKDF-SHA256:** 32-byte derived keys
-- **HMAC-SHA256:** additional integrity verification
-- **Container salt:** 16 bytes
-- **Encryption chunk size:** 128 KiB
-
-### Device Binding
-
-Device-bound vaults derive a device fingerprint from hardware identifiers. The current implementation uses MAC address, CPU information, and disk information. The resulting fingerprint is hashed and used to derive a device key at runtime.
-
-A vault can therefore require both the user's password and the expected device identity.
-
-## Container Format
-
-EncryptHome uses a custom `.salt` container format.
-
-```text
-[Header 28B][File Blob 1][File Blob 2]...[Meta Length 8B][Encrypted Meta]
-```
-
-### Header
-
-```text
-Magic      4 bytes   ANC0
-Version    1 byte    0x09
-Flags      1 byte    Device / Keyfile / Pro flags
-Salt       16 bytes  Random container salt
-Reserved   6 bytes   Reserved for future use
-```
-
-### File Blob
-
-```text
-[File Nonce 16B]
-[GCM Nonce 12B]
-[Ciphertext]
-[GCM Tag 16B]
-[HMAC-SHA256 32B]
-```
-
-### Metadata
-
-Vault metadata is serialized as JSON and encrypted with AES-256-GCM. An HMAC-SHA256 value provides an additional integrity check.
-
-## Integrity Protection
-
-EncryptHome performs several integrity checks:
-
-1. **AES-GCM authentication** during decryption
-2. **HMAC-SHA256 verification** for encrypted file data
-3. **HMAC-SHA256 verification** for encrypted metadata
-4. **Header validation** for vault structure
-5. **SHA-256 application checksums** for detecting modified application files
-
-Integrity failures are reported instead of silently accepting corrupted or modified data.
-
-## Secure Deletion
-
-EncryptHome can securely overwrite files before deletion. Available deletion methods include standard deletion and multiple multi-pass overwrite modes, including ANCORATE-specific methods.
-
-The application also provides an emergency vault-wiping function for deleting vault files.
-
-> Secure overwrite effectiveness depends on the storage medium. On SSDs and modern copy-on-write filesystems, software overwriting cannot guarantee physical erasure of previous data.
-
-## File Preview
-
-Files can be previewed in memory without first exporting the decrypted content to a normal file on disk. Preview caching is limited and automatically managed.
-
-## Configuration
-
-Settings are stored in platform-specific locations:
-
-- **Linux:** `~/.config/ANCORATE/settings.json`
-- **Windows:** `%APPDATA%\\ANCORATE\\settings.json`
-- **macOS:** `~/Library/Application Support/ANCORATE/settings.json`
-
-Current settings include:
-
-- Theme selection
-- Keyboard shortcuts
-- Auto-lock configuration
-- Secure deletion method
-- Source-file deletion after encryption
-- Other application preferences
-
-## Keyboard Shortcuts
-
-| Action | Shortcut |
-|---|---|
-| Create New Vault | `Ctrl+N` |
-| Open Existing Vault | `Ctrl+O` |
-| Add Files | `Ctrl++` |
-| Export Selected | `Ctrl+E` |
-| Export All | `Alt+E` |
-| Delete Selected | `Del` |
-| Delete Container | `Alt+Del` |
-| Search Files | `Return` |
-| Recent Containers | `Ctrl+R` |
-
-## Project Structure
-
-```text
-EncryptHome/
-├── main.py                 # Main application and GUI
-├── base.py                 # Cryptographic primitives and key derivation
-├── encrypt.py              # Encryption operations
-├── decrypt.py              # Decryption operations
-├── decrypt_preview.py      # In-memory preview system
-├── utilities/
-│   ├── settings.py         # Settings management
-│   ├── header_utils.py     # Container header utilities
-│   ├── checksum_check.py   # Application integrity verification
-│   ├── sos_delete.py       # Emergency vault deletion
-│   ├── updater.py          # Update mechanism
-│   └── themes/             # Qt themes
-├── docs/                   # Technical documentation
-├── AGENTS.md               # Development guidelines
-└── README.md               # Project documentation
-```
-
-## Development
-
-### Development Environment
-
-```bash
-python -m venv venv
-source venv/bin/activate  # Windows: venv\\Scripts\\activate
-pip install PyQt6 argon2-cffi cryptography requests
-```
-
-Optional development tools:
-
-```bash
-pip install black pylint mypy pytest pytest-cov PyInstaller
-```
-
-### Build
-
-The repository contains the current PyInstaller build specification. For the current 26.2 build:
-
-```bash
-pyinstaller ANCORATE_EncryptHome_26.2_Build_0009.spec
-```
-
-## Requirements
-
-### Minimum
-
-- Python 3.10+
-- 1 GB RAM
-- 100 MB free disk space
-- Windows 10+, Ubuntu 18.04+, or macOS 10.15+
-
-### Recommended
-
-- Python 3.10+
-- 8 GB RAM
-- 500 MB free disk space
-
-## Security Notes
-
-EncryptHome is designed around defense in depth. Passwords and cryptographic keys are not intentionally stored in plaintext on disk. The master key is kept in memory for the active session, while device keys are derived at runtime.
-
-Users should still use strong, unique passwords, enable device binding for sensitive vaults, keep secure backups, use full-disk encryption, and keep EncryptHome and its dependencies up to date.
-
-## Documentation
-
-Technical documentation is available in `docs/`:
-
-- `docs/README.md` — developer documentation
-- `docs/ARCHITECTURE.md` — architecture and data flow
-- `docs/SECURITY.md` — security model and threat analysis
-- `docs/API_REFERENCE.md` — API reference
-- `docs/DEVELOPMENT.md` — development guide
-- `docs/CONTRIBUTING.md` — contribution guidelines
-
-## License
-
-This is proprietary software. All rights reserved.
-
-**Copyright © 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin.**
-
-Unauthorized reproduction, reuse, modification, or distribution is strictly prohibited.
-
-## Acknowledgments
-
-EncryptHome uses:
-
-- **PyQt6** — GUI framework
-- **argon2-cffi** — Argon2 password hashing and key derivation
-- **cryptography** — cryptographic primitives
-- **requests** — HTTP library
+`main.py` is intentionally kept as the entry point even though most application code now lives in `app/`. fileciteturn8file0
 
 ---
 
-<div align="center">
+## Security scope
 
-**EncryptHome — Security Through Strong Encryption**
+EncryptHome is a local desktop application. The code provides authenticated encryption, password-derived keys, optional device binding, encrypted metadata, integrity checks, secure-deletion options, and local runtime controls.
 
-</div>
+This README documents the **current implementation**. It does not describe planned EncryptHome 27 features or other features that are only represented by unused flags, legacy helpers, comments, or future-oriented code.
+
+---
+
+## License
+
+Proprietary software. All rights reserved.
+
+Copyright © 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin.
