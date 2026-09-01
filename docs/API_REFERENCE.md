@@ -622,6 +622,32 @@ Changes vault password by re-encrypting all data.
 
 **Time Complexity:** O(n) where n is number/size of files
 
+---
+
+#### Container operations (`utilities/container_ops.py`)
+
+##### `file_sha256(path: str, chunk_size: int = 128 * 1024) -> str`
+
+Streams a file and returns its hex SHA-256. Used to store a plaintext integrity hash in the file metadata.
+
+##### `new_file_entry(name, size, offset, length, *, mtime=None, created=None, added=None, edited=None, sha256=None) -> dict`
+
+Builds a metadata entry dictionary for a file in the vault.
+
+##### `touch_container_meta(meta: dict, *, flags: int | None = None, app_version: str | None = None) -> dict`
+
+Updates the container-level metadata (`modified`, optional `flags`/`app_version`, and a `format` default).
+
+##### `replace_entry_in_container(container_path, meta, entry_index, new_data_path, master_key, flags, *, progress_cb=None, stop_event=None, app_version=None) -> dict`
+
+Replaces a single vault entry with the content of `new_data_path` by rebuilding the container atomically into a temporary file and replacing the original only on success. Unchanged blobs are copied verbatim and the salt is preserved so the master key stays valid. On cancel or error the original container remains untouched. Returns the new metadata with updated offsets/lengths.
+
+---
+
+#### `RewriteEntryWorker(QObject)`
+
+Background worker that calls `replace_entry_in_container`. Signals: `progress(int)`, `finished(object)` (new metadata), `error(str)`. Used by the in-vault editing flow.
+
 **Space Complexity:** O(1) - uses temporary files
 
 ---

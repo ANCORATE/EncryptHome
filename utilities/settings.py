@@ -3,6 +3,9 @@ import os
 import shutil
 import sys
 import platform
+import hashlib
+import tempfile
+import time
 
 import requests
 from PyQt6.QtCore import *
@@ -35,6 +38,8 @@ SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
 _SETTINGS_MAGIC = b"ANC_STG\x01"
 _SETTINGS_SALT = b"ENC_HOME_SETTINGS_V1"
 _SETTINGS_INFO = "ancorate-settings-v1"
+# Stabiler Key-Derivations-Info: domain-separiert vom alten Schlüssel.
+_STABLE_SETTINGS_INFO = "ancorate-settings-v2-stable"
 _MIGRATED = False  # einmalige Migration alter Klartext-Dateien pro Prozess
 
 VERSION_YEAR = "26"
@@ -122,29 +127,98 @@ ACCENT_PRESETS = [
 ]
 
 
-def _settings_key():
-    """Berechnet den gerätegebundenen Schlüssel für Einstellungen.
+def _settings_keys():
+    """VERALTET - nur noch als Migrations-Fallback.
 
-    Wird aus dem Geräteschlüssel abgeleitet (Domain-Separation via HKDF),
-    damit Key-Material niemals wiederverwendet wird.
-    Lazy import: app.core importiert utilities.settings - ein Modul-Import
-    von app.core wäre hier ein Zirkularimport.
+    Die frühere Ableitung lief über das Laufzeit-Device-Fingerprinting
+    (generate_device_key -> CIM/WMI-Abfragen via Subprozess mit 3s-Timeouts).
+    Deren Ergebnis konnte je nach Kontext bzw. Zeitüberschreitung wechseln,
+    wodurch eine gespeicherte settings.json beim nächsten Start nicht mehr
+    entschlüsselt werden konnte („korrupte“ Einstellungen).
+
+    Für neue Writes wird `_stable_settings_key` verwendet. Diese Funktion
+    liefert ALLE deterministischen Varianten des alten Schemas, damit bereits
+    mit dem alten Schlüssel verschlüsselte Daten einmalig gelesen und
+    migriert werden können.
     """
     try:
-        from app.core import generate_device_key
-        dev = generate_device_key()
-        if not isinstance(dev, bytes) or len(dev) not in (16, 24, 32):
-            return None
+        from app.core import legacy_device_key_variants
+        variants = legacy_device_key_variants()
+        keys = []
         from base import derive_subkey
-        return derive_subkey(dev, _SETTINGS_SALT, _SETTINGS_INFO)
+        for dev in variants:
+            if not isinstance(dev, bytes) or len(dev) not in (16, 24, 32):
+                continue
+            keys.append(derive_subkey(dev, _SETTINGS_SALT, _SETTINGS_INFO))
+        return keys or None
     except Exception as e:
         print(f"[WARN] Settings key derivation failed: {e}")
         return None
 
 
+def _settings_key():
+    """Migrations-Fallback: primäre Variante des alten Schlüssel-Schemas."""
+    try:
+        keys = _settings_keys()
+        return keys[0] if keys else None
+    except Exception:
+        return None
+
+
+def _stable_machine_id() -> bytes:
+    """Stabile, subprocess-unabhängige Maschinen-ID.
+
+    Bevorzugt die Windows MachineGuid aus der Registry (schnell, ohne
+    Subprozess, identisch bei jedem Start). Fallbacks: MAC-Adresse,
+    dann Hostname+Plattform.
+    """
+    try:
+        import winreg
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography"
+        ) as key:
+            guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+            if guid and isinstance(guid, str):
+                return guid.encode("utf-8")
+    except Exception:
+        pass
+    try:
+        import uuid
+        mac = uuid.getnode()
+        if mac:
+            return int(mac).to_bytes(6, "big", signed=False)
+    except Exception:
+        pass
+    import platform
+    return hashlib.sha256(
+        f"{platform.node()}|{platform.system()}".encode("utf-8")
+    ).digest()
+
+
+def _stable_settings_key():
+    """Gerätegebundener, STABILER Schlüssel für Einstellungen.
+
+    Wird aus einer stabilen Maschinen-ID abgeleitet (Domain-Separation via
+    HKDF), damit die Einstellungen nicht bei jedem Start „korrupt“ erscheinen.
+    """
+    try:
+        machine_id = _stable_machine_id()
+        if not machine_id:
+            return None
+        from base import derive_subkey
+        return derive_subkey(machine_id, _SETTINGS_SALT, _STABLE_SETTINGS_INFO)
+    except Exception as e:
+        print(f"[WARN] Stable settings key derivation failed: {e}")
+        return None
+
+
 def _write_encrypted(settings: dict):
     """Schreibt Einstellungen verschlüsselt (atomar über os.replace)."""
-    key = _settings_key()
+    key = _stable_settings_key()
+    if not key:
+        # Fallback zur alten Ableitung - verhindert einen komplett
+        # unbrauchbaren Zustand, falls die stabile ID unverfügbar ist.
+        key = _settings_key()
     if not key:
         raise RuntimeError(
             "Kein Geräteschlüssel verfügbar - Verschlüsselung der Einstellungen nicht möglich."
@@ -152,11 +226,24 @@ def _write_encrypted(settings: dict):
     from encrypt import encrypt_meta
 
     blob = encrypt_meta(settings, key)
-    tmp = SETTINGS_FILE + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(_SETTINGS_MAGIC)
-        f.write(blob)
-    os.replace(tmp, SETTINGS_FILE)
+    # Einzigartiger Temp-Name: verhindert Verfälschungen durch parallele
+    # Schreiber (mehrere Prozesse nutzten vorher dieselbe .tmp-Datei).
+    tmp_fd, tmp = tempfile.mkstemp(
+        dir=CONFIG_DIR, prefix=".settings-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(tmp_fd, "wb") as f:
+            f.write(_SETTINGS_MAGIC)
+            f.write(blob)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, SETTINGS_FILE)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _read_settings_raw() -> dict | None:
@@ -169,15 +256,40 @@ def _read_settings_raw() -> dict | None:
 
     if raw.startswith(_SETTINGS_MAGIC):
         blob = raw[len(_SETTINGS_MAGIC):]
-        key = _settings_key()
-        if not key:
-            return None
-        try:
-            from decrypt import decrypt_meta
-            return decrypt_meta(blob, key)
-        except Exception as e:
-            print(f"[ERROR] Settings decryption failed: {e}")
-            return None
+
+        # 1) Stabiler Schlüssel - der neue, zuverlässige Pfad.
+        key = _stable_settings_key()
+        if key:
+            try:
+                from decrypt import decrypt_meta
+                return decrypt_meta(blob, key)
+            except Exception:
+                pass  # evtl. noch mit altem Schlüssel verschlüsselt
+
+        # 2) Alter Laufzeit-Fingerprint-Schlüssel: Daten sichern und auf den
+        #    stabilen Schlüssel migrieren (einmalig), falls der zutrifft.
+        legacy_keys = _settings_keys()
+        if legacy_keys:
+            data = None
+            for legacy_key in legacy_keys:
+                try:
+                    from decrypt import decrypt_meta
+                    data = decrypt_meta(blob, legacy_key)
+                    if data is not None:
+                        break
+                except Exception:
+                    continue
+            if data is None:
+                print("[ERROR] Settings decryption failed: kein passender Schlüssel verfügbar")
+                return None
+            try:
+                _write_encrypted(data)
+                print("[Info] Settings auf stabilen Geräteschlüssel migriert.")
+            except Exception as e:
+                print(f"[WARN] Settings-Migration auf stabilen Schlüssel fehlgeschlagen: {e}")
+            return data
+        print("[ERROR] Settings decryption failed: kein passender Schlüssel verfügbar")
+        return None
 
     # Legacy: unverschlüsselte Dump-Datei aus früheren Versionen
     try:
@@ -199,8 +311,36 @@ def _migrate_encrypted(data: dict):
         print(f"[WARN] Settings-Migration auf verschlüsseltes Format fehlgeschlagen: {e}")
 
 
+def _cleanup_stale_settings_tmp():
+    """Entfernt verwaiste Temp-Dateien abgestürzter Schreibvorgänge.
+
+    Das alte Fix-Format war `settings.json.tmp` (Kollisions- und
+    Truncation-Ursache bei parallelen Schreibern); neue Writes verwenden
+    eindeutige `.settings-*.tmp`-Dateien. Nur Dateien, die älter als eine
+    Minute sind, werden entfernt - ein parallel laufender weiterer
+    App-Prozess schreibt seine Temp-Datei in Millisekunden.
+    """
+    try:
+        now = time.time()
+        stale = []
+        for name in os.listdir(CONFIG_DIR):
+            if name == "settings.json.tmp" or (
+                name.startswith(".settings-") and name.endswith(".tmp")
+            ):
+                stale.append(os.path.join(CONFIG_DIR, name))
+        for tmp in stale:
+            try:
+                if os.path.isfile(tmp) and now - os.path.getmtime(tmp) > 60:
+                    os.remove(tmp)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
 def load_settings():
     path = SETTINGS_FILE
+    _cleanup_stale_settings_tmp()
     if not os.path.exists(path):
         return DEFAULT_SETTINGS.copy()
     try:
@@ -598,38 +738,47 @@ class SettingsDialog(QDialog):
         self.stack.addWidget(widget)
 
     def create_design_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout()
-        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # ScrollArea wie im Allgemein-Tab, damit der Inhalt bei kleinen Fenstern bleibt
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
 
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.setSpacing(20)
+
+        # --- Titel ---
         title = QLabel("Design & Erscheinungsbild")
         title.setStyleSheet("font-weight: bold; font-size: 16px;")
         layout.addWidget(title)
-        layout.addSpacing(20)
 
-        lbl = QLabel("Wählen Sie ein Design-Theme:")
-        layout.addWidget(lbl)
+        # --- Sektion: Erscheinungsbild (QGroupBox) ---
+        group_appearance = QGroupBox("Erscheinungsbild")
+        form_appearance = QFormLayout()
+        form_appearance.setSpacing(10)
+        form_appearance.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
 
+        # Design-Theme
+        theme_lbl = QLabel("Design-Theme:")
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(list(VALID_THEMES))
         self.theme_combo.setCurrentText(self.data.get("theme", "Standard-dark"))
-        layout.addWidget(self.theme_combo)
         self.theme_combo.currentTextChanged.connect(self._save_theme)
+        form_appearance.addRow(theme_lbl, self.theme_combo)
 
         # Schriftgröße / Dichte
-        density_row = QHBoxLayout()
-        density_row.addWidget(QLabel("Schriftgröße / Dichte:"))
+        density_lbl = QLabel("Schriftgröße / Dichte:")
         self.density_combo = QComboBox()
         self.density_combo.addItems(list(VALID_DENSITIES))
         self.density_combo.setCurrentText(self.data.get("ui_density", "Mittel"))
-        density_row.addWidget(self.density_combo, 1)
-        density_row.addStretch()
-        layout.addLayout(density_row)
         self.density_combo.currentTextChanged.connect(self._save_density)
+        form_appearance.addRow(density_lbl, self.density_combo)
 
         # Akzentfarbe
-        accent_row = QHBoxLayout()
-        accent_row.addWidget(QLabel("Akzentfarbe:"))
+        accent_lbl = QLabel("Akzentfarbe:")
         self.accent_combo = QComboBox()
         for label, value in ACCENT_PRESETS:
             self.accent_combo.addItem(label, value)
@@ -641,53 +790,61 @@ class SettingsDialog(QDialog):
                 current_accent)
             accent_index = self.accent_combo.count() - 1
         self.accent_combo.setCurrentIndex(accent_index)
-        accent_row.addWidget(self.accent_combo, 1)
+        self.accent_combo.currentIndexChanged.connect(self._on_accent_index_changed)
 
         self.accent_pick_btn = QPushButton("Eigene...")
         self.accent_pick_btn.clicked.connect(self._pick_accent)
+
+        accent_row = QHBoxLayout()
+        accent_row.setSpacing(8)
+        accent_row.addWidget(self.accent_combo, 1)
         accent_row.addWidget(self.accent_pick_btn)
-        layout.addLayout(accent_row)
-        self.accent_combo.currentIndexChanged.connect(self._on_accent_index_changed)
+        form_appearance.addRow(accent_lbl, accent_row)
 
-        # Dateilisten-Ansicht
+        group_appearance.setLayout(form_appearance)
+        layout.addWidget(group_appearance)
+
+        # --- Sektion: Dateiliste (QGroupBox) ---
         list_group = QGroupBox("Dateiliste")
-        list_layout = QVBoxLayout()
+        form_list = QFormLayout()
+        form_list.setSpacing(10)
+        form_list.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
 
-        mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("Darstellung:"))
+        mode_lbl = QLabel("Darstellung:")
         self.list_mode_combo = QComboBox()
         self.list_mode_combo.addItem("Liste", "list")
         self.list_mode_combo.addItem("Raster", "grid")
         self.list_mode_combo.setCurrentIndex(
             0 if self.data.get("list_view_mode", "list") == "list" else 1)
-        mode_row.addWidget(self.list_mode_combo)
-        mode_row.addWidget(QLabel("Sortierung:"))
+        self.list_mode_combo.currentIndexChanged.connect(self._save_list_mode)
+        form_list.addRow(mode_lbl, self.list_mode_combo)
+
+        sort_lbl = QLabel("Sortierung:")
         self.list_sort_combo = QComboBox()
         self.list_sort_combo.addItems(list(VALID_LIST_SORTS))
         self.list_sort_combo.setCurrentText(self.data.get("list_sort", "Keine"))
-        mode_row.addWidget(self.list_sort_combo)
-        mode_row.addStretch()
-        list_layout.addLayout(mode_row)
+        self.list_sort_combo.currentTextChanged.connect(self._save_list_sort)
+        form_list.addRow(sort_lbl, self.list_sort_combo)
 
         self.cb_show_size = QCheckBox("Dateigröße anzeigen")
         self.cb_show_size.setChecked(bool(self.data.get("list_show_size", True)))
-        list_layout.addWidget(self.cb_show_size)
+        self.cb_show_size.toggled.connect(self._save_list_show_size)
+        form_list.addRow(self.cb_show_size)
 
         self.cb_show_date = QCheckBox("Datum anzeigen")
         self.cb_show_date.setChecked(bool(self.data.get("list_show_date", True)))
-        list_layout.addWidget(self.cb_show_date)
+        self.cb_show_date.toggled.connect(self._save_list_show_date)
+        form_list.addRow(self.cb_show_date)
 
-        list_group.setLayout(list_layout)
+        list_group.setLayout(form_list)
         layout.addWidget(list_group)
 
-        self.list_mode_combo.currentIndexChanged.connect(self._save_list_mode)
-        self.list_sort_combo.currentTextChanged.connect(self._save_list_sort)
-        self.cb_show_size.toggled.connect(self._save_list_show_size)
-        self.cb_show_date.toggled.connect(self._save_list_show_date)
-
         layout.addStretch()
-        widget.setLayout(layout)
-        self.stack.addWidget(widget)
+
+        scroll.setWidget(content_widget)
+        self.stack.addWidget(scroll)
 
     def create_updates_tab(self):
         """Erstellt den separierten Update-Tab."""

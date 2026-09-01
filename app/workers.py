@@ -29,6 +29,12 @@ from encrypt import *
 
 # Utilities
 from utilities.checksum_check import *
+from utilities.container_ops import (
+    file_sha256,
+    new_file_entry,
+    replace_entry_in_container,
+    touch_container_meta,
+)
 from utilities.header_utils import *
 from utilities.settings import *
 
@@ -96,6 +102,11 @@ class AddWorker(QObject):
                 # Meta entschlüsseln
                 meta = decrypt_meta(meta_blob, v2)
 
+                # Container-Ebene der Metadaten aktualisieren
+                meta = touch_container_meta(
+                    meta, flags=self.flags, app_version=f"{edition} {version}"
+                )
+
                 # Datei ab hier kürzen, neuer Content wird angehängt
                 f.truncate(meta_pos)
                 f.seek(0, os.SEEK_END)
@@ -129,17 +140,22 @@ class AddWorker(QObject):
                         newpos = f.tell()
                         blob_len = newpos - offset
                         try:
-                            mtime = int(os.path.getmtime(filepath))
-                        except Exception:
-                            mtime = None
-                        entry = {
-                            "name": name,
-                            "size": size,
-                            "offset": offset,
-                            "length": blob_len,
-                        }
-                        if mtime:
-                            entry["mtime"] = mtime
+                            f_stat = os.stat(filepath)
+                            f_mtime = int(f_stat.st_mtime)
+                            f_created = int(f_stat.st_ctime)
+                        except OSError:
+                            f_mtime = None
+                            f_created = None
+                        entry = new_file_entry(
+                            name,
+                            size,
+                            offset,
+                            blob_len,
+                            mtime=f_mtime,
+                            created=f_created,
+                            added=int(time.time()),
+                            sha256=file_sha256(filepath),
+                        )
                         meta["files"].append(entry)
                         added.append(name)
                         added_paths.append(filepath)
@@ -283,6 +299,54 @@ class ExportBatchWorker(QObject):
         except Exception as e:
             error_msg = str(e) if str(e) else repr(e)
             print(f"[DEBUG] Worker error: {error_msg}")
+            print(f"[DEBUG] Exception type: {type(e).__name__}")
+            self.error.emit(error_msg)
+
+
+class RewriteEntryWorker(QObject):
+    """Ersetzt den Inhalt eines Datei-Eintrags im Container durch eine
+    entschlüsselte, extern bearbeitete Datei (In-Tresor-Bearbeitung)."""
+
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        container_path: str,
+        meta: dict,
+        entry_index: int,
+        new_data_path: str,
+        master_key: bytes,
+        flags: int,
+        stop_event: threading.Event = None,
+    ):
+        super().__init__()
+        self.container_path = container_path
+        self.meta = meta
+        self.entry_index = int(entry_index)
+        self.new_data_path = new_data_path
+        self.master_key = master_key
+        self.flags = flags
+        self.stop_event = stop_event or threading.Event()
+
+    def run(self):
+        try:
+            new_meta = replace_entry_in_container(
+                self.container_path,
+                self.meta,
+                self.entry_index,
+                self.new_data_path,
+                self.master_key,
+                self.flags,
+                progress_cb=self.progress.emit,
+                stop_event=self.stop_event,
+                app_version=f"{edition} {version}",
+            )
+            self.finished.emit(new_meta)
+        except Exception as e:
+            error_msg = str(e) if str(e) else repr(e)
+            print(f"[DEBUG] Rewrite worker error: {error_msg}")
             print(f"[DEBUG] Exception type: {type(e).__name__}")
             self.error.emit(error_msg)
 

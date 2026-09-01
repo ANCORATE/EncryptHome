@@ -14,6 +14,7 @@ import subprocess
 import socket
 import platform
 import requests
+import tempfile
 from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
@@ -82,6 +83,12 @@ class App(QWidget):
         self._preview_cache_bytes: int = 0
         self._preview_cache_limit: int = 200 * 1024 * 1024  # 200 MiB total
         self._preview_max_file_bytes: int = PREVIEW_MAX_BYTES
+        # In-Tresor-Bearbeitung (externer Editor auf entschlüsselter Temp-Datei)
+        self._edit_session: dict | None = None
+        self._edit_cleanup_pending: list = []
+        self._edit_poll_timer = QTimer(self)
+        self._edit_poll_timer.setInterval(500)
+        self._edit_poll_timer.timeout.connect(self._poll_edit_session)
 
         self.layout = QVBoxLayout(self)
         
@@ -118,7 +125,7 @@ class App(QWidget):
         self.search_sc = QShortcut(QKeySequence("Return"), self)
         self.recent_containers_sc = QShortcut(QKeySequence("Ctrl+R"), self)
 
-        self.file_list.itemDoubleClicked.connect(self.preview_selected)
+        self.file_list.itemDoubleClicked.connect(self.start_in_vault_edit)
 
         # Live-Suche: textChanged feuert im GUI-Thread, sodass keine
         # Qt-Widgets aus einem Hintergrund-Thread angesprochen werden.
@@ -273,15 +280,17 @@ class App(QWidget):
         actions_edit = [
             QAction("Datei(en) hinzufügen", self),
             QAction("Dateivorschau starten", self),
+            QAction("Datei im Tresor bearbeiten", self),
             QAction("Datei löschen", self),
             QAction("Datei exportieren", self),
             QAction("Alles exportieren", self),
         ]
         actions_edit[0].triggered.connect(self.add_file_dialog)
         actions_edit[1].triggered.connect(self.preview_selected)
-        actions_edit[2].triggered.connect(self.delete_selected)
-        actions_edit[3].triggered.connect(self.export_selected)
-        actions_edit[4].triggered.connect(self.export_all)
+        actions_edit[2].triggered.connect(self.start_in_vault_edit)
+        actions_edit[3].triggered.connect(self.delete_selected)
+        actions_edit[4].triggered.connect(self.export_selected)
+        actions_edit[5].triggered.connect(self.export_all)
         for a in actions_edit:
             edit_menu.addAction(a)
 
@@ -372,6 +381,11 @@ class App(QWidget):
 
     def change_container_password_dialog(self):
             """Show password change dialog for current container"""
+            if getattr(self, "_edit_session", None):
+                QMessageBox.information(
+                    self, "Info", "Schließe zuerst die laufende In-Tresor-Bearbeitung ab."
+                )
+                return
             if not self.container_path or not self.master_key:
                 QMessageBox.warning(self, "Kein Container", "Bitte öffnen Sie zuerst einen Container.")
                 return
@@ -639,9 +653,38 @@ class App(QWidget):
             else:
                 self.open_container()
 
+    # ------------------ In-Tresor-Bearbeitung: Helfer ------------------
+    def _persist_meta(self):
+        """Schreibt self.meta als neuen Meta-Blob ans Container-Ende."""
+        if not self.container_path or not self.master_key:
+            return
+        with open(self.container_path, "rb+") as fh:
+            fh.seek(-META_LEN_SIZE, os.SEEK_END)
+            meta_len_bytes = fh.read(META_LEN_SIZE)
+            if len(meta_len_bytes) != META_LEN_SIZE:
+                raise ValueError("Meta-Länge konnte nicht gelesen werden.")
+            meta_len = struct.unpack("<Q", meta_len_bytes)[0]
+            meta_pos = os.path.getsize(self.container_path) - META_LEN_SIZE - meta_len
+            fh.truncate(meta_pos)
+            fh.seek(0, os.SEEK_END)
+            blob = encrypt_meta(self.meta, self.master_key)
+            fh.write(blob)
+            fh.write(struct.pack("<Q", len(blob)))
+
+    def _record_container_opened(self):
+        """Protokolliert den letzten Öffnungszeitpunkt des Tresors."""
+        try:
+            meta = dict(self.meta)
+            meta["opened"] = int(time.time())
+            meta["app_version"] = f"{edition} {version}"
+            self.meta = meta
+            self._persist_meta()
+        except Exception as e:
+            self.append_log(f"Opened-Zeitstempel konnte nicht gespeichert werden: {e}")
+
     def open_container_with_password(self, container_path: str, password: str):
         """Öffnet einen bestehenden Container mit dem angegebenen Passwort"""
-        
+
         # Use provided path and password
         self.container_path = container_path
         pwd = password
@@ -671,17 +714,7 @@ class App(QWidget):
                     self.update_container_path()
                     return
 
-                # 4b. Master-Key ableiten
-                master = derive_master_key(
-                    pwd,
-                    salt,
-                    bool(flags & FLAG_DEVICE),
-                    load_device_key() if (flags & FLAG_DEVICE) else None,
-                )
-                if master is None:
-                    raise ValueError("Master-Key konnte nicht abgeleitet werden.")
-
-                # 4c. Meta-Länge aus Dateiende lesen
+                # 4b. Meta-Länge aus Dateiende lesen
                 file_size = os.path.getsize(self.container_path)
                 fh.seek(file_size - META_LEN_SIZE, os.SEEK_SET)
 
@@ -693,7 +726,7 @@ class App(QWidget):
                 if meta_len <= 0:
                     raise ValueError("Meta-Länge ungültig.")
 
-                # 4d. Meta-Blob lesen
+                # 4c. Meta-Blob lesen
                 meta_pos = file_size - META_LEN_SIZE - meta_len
                 fh.seek(meta_pos, os.SEEK_SET)
 
@@ -702,8 +735,13 @@ class App(QWidget):
                     raise ValueError("Meta-Blob konnte nicht gelesen werden.")
 
             # ------------------------------------------------------------------
-            # 5. Nach dem Schließen der Datei: Meta entschlüsseln
+            # 5. Master-Key bestimmen (inkl. Legacy-Kandidaten für
+            #    gerätegebundene Tresore aus älteren Versionen) und Meta
+            #    entschlüsseln
             # ------------------------------------------------------------------
+            master = determine_master_key(pwd, salt, flags, meta_blob)
+            if master is None:
+                raise ValueError("signature did not match digest")
             meta = decrypt_meta(meta_blob, master)
             if meta is None:
                 raise ValueError("Metadaten konnten nicht entschlüsselt werden.")
@@ -715,6 +753,7 @@ class App(QWidget):
             self.master_key = master
             self.meta = meta
             self.flags = flags
+            self._record_container_opened()
 
             # ------------------------------------------------------------------
             # 7. GUI aktualisieren
@@ -793,17 +832,7 @@ class App(QWidget):
                     self.update_container_path()
                     return
 
-                # 4b. Master-Key ableiten
-                master = derive_master_key(
-                    pwd,
-                    salt,
-                    bool(flags & FLAG_DEVICE),
-                    load_device_key() if (flags & FLAG_DEVICE) else None,
-                )
-                if master is None:
-                    raise ValueError("Master-Key konnte nicht abgeleitet werden.")
-
-                # 4c. Meta-Länge aus Dateiende lesen
+                # 4b. Meta-Länge aus Dateiende lesen
                 file_size = os.path.getsize(self.container_path)
                 fh.seek(file_size - META_LEN_SIZE, os.SEEK_SET)
 
@@ -815,7 +844,7 @@ class App(QWidget):
                 if meta_len <= 0:
                     raise ValueError("Meta-Länge ungültig.")
 
-                # 4d. Meta-Blob lesen
+                # 4c. Meta-Blob lesen
                 meta_pos = file_size - META_LEN_SIZE - meta_len
                 fh.seek(meta_pos, os.SEEK_SET)
 
@@ -824,8 +853,13 @@ class App(QWidget):
                     raise ValueError("Meta-Blob konnte nicht gelesen werden.")
 
             # ------------------------------------------------------------------
-            # 5. Nach dem Schließen der Datei: Meta entschlüsseln
+            # 5. Master-Key bestimmen (inkl. Legacy-Kandidaten für
+            #    gerätegebundene Tresore aus älteren Versionen) und Meta
+            #    entschlüsseln
             # ------------------------------------------------------------------
+            master = determine_master_key(pwd, salt, flags, meta_blob)
+            if master is None:
+                raise ValueError("signature did not match digest")
             meta = decrypt_meta(meta_blob, master)
             if meta is None:
                 raise ValueError("Metadaten konnten nicht entschlüsselt werden.")
@@ -837,6 +871,7 @@ class App(QWidget):
             self.master_key = master
             self.meta = meta
             self.flags = flags
+            self._record_container_opened()
 
             # ------------------------------------------------------------------
             # 7. GUI aktualisieren
@@ -945,6 +980,14 @@ Mögliche Ursache
         self.append_log("Container created.")
 
     def delete_container(self):
+        if getattr(self, "_edit_session", None):
+            QMessageBox.information(
+                self, "Info", "Schließe zuerst die laufende In-Tresor-Bearbeitung ab."
+            )
+            return
+        if not self.container_path:
+            QMessageBox.warning(self, "Fehler", "Keine Tresordatei geöffnet.")
+            return
         # 1. Validierung des Pfads
         c_path = getattr(self, "container_path", "")
         if not c_path or not os.path.exists(c_path):
@@ -1045,6 +1088,7 @@ Mögliche Ursache
 
     # ------------------ Container Operationen ------------------
     def close_container(self):
+        self._end_edit_session()
         if hasattr(self, "stop_event") and self.stop_event:
             try:
                 self.stop_event.set()
@@ -1086,6 +1130,11 @@ Mögliche Ursache
         Datei(en) zum Tresor hinzufügen.
         :param filepaths: Liste von Pfaden oder None → Dialog öffnen
         """
+        if getattr(self, "_edit_session", None):
+            QMessageBox.information(
+                self, "Info", "Schließe zuerst die laufende In-Tresor-Bearbeitung ab, bevor du Dateien hinzufügst."
+            )
+            return
         if self.changing_password or self.password_change_in_progress:
             QMessageBox.information(
                 self, 
@@ -1332,6 +1381,351 @@ Mögliche Ursache
         thread.started.connect(worker.run)
         thread.start()
 
+    # ------------------ In-Tresor-Bearbeitung (externer Editor) ------------------
+    def start_in_vault_edit(self, *_args):
+        if not self.container_path or not self.master_key:
+            QMessageBox.information(
+                self, "Bearbeiten", "Bitte zuerst einen Tresor öffnen."
+            )
+            return
+        if self.changing_password or self.password_change_in_progress:
+            QMessageBox.information(
+                self,
+                "Info",
+                "Ein Passwortwechsel wird durchgeführt. Bitte warten Sie, bis dieser abgeschlossen ist, bevor Sie Dateien bearbeiten.",
+            )
+            return
+        if getattr(self, "_edit_session", None):
+            QMessageBox.information(
+                self,
+                "Info",
+                "Es wird bereits eine Datei bearbeitet.\nSchließe zuerst die laufende Bearbeitung ab.",
+            )
+            return
+        if getattr(self, "exporting", False):
+            QMessageBox.information(
+                self, "Info", "Eine andere Aktion läuft gerade. Bitte kurz warten."
+            )
+            return
+
+        idx = self._selected_meta_index()
+        if idx is None or idx < 0:
+            QMessageBox.information(self, "Bearbeiten", "Bitte eine Datei auswählen.")
+            return
+
+        entry = dict(self.meta["files"][int(idx)])
+        name = entry.get("name", "datei")
+        suffix = os.path.splitext(name)[1]
+
+        try:
+            fd, tmp_path = tempfile.mkstemp(prefix="ancorate_edit_", suffix=suffix or ".tmp")
+            os.close(fd)
+        except OSError as e:
+            QMessageBox.critical(
+                self, "Fehler", f"Temporäre Datei konnte nicht erstellt werden:\n{e}"
+            )
+            return
+
+        self.stop_event = threading.Event()
+        worker = ExportWorker(
+            self.container_path,
+            {**entry, "__save_to": tmp_path},
+            self.master_key,
+            stop_event=self.stop_event,
+        )
+        thread = QThread()
+        worker.moveToThread(thread)
+
+        self.progress = QProgressDialog(
+            "Entschlüssle Datei zum Bearbeiten...", "Abbrechen", 0, 100, self
+        )
+        self.progress.setWindowTitle(f"ANCORATE {edition}")
+        self.progress.canceled.connect(self.cancel_current)
+        worker.progress.connect(self._on_progress)
+        worker.finished.connect(
+            lambda p: self._edit_decrypt_finished(p, thread, worker, int(idx), entry, tmp_path)
+        )
+        worker.error.connect(lambda e: self._edit_decrypt_error(e, thread, worker, tmp_path))
+        thread.started.connect(worker.run)
+        thread.start()
+
+    def _open_file_default_app(self, path):
+        system = platform.system()
+        if system == "Windows":
+            os.startfile(path)
+        elif system == "Darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+
+    def _edit_decrypt_finished(self, path, thread, worker, idx, entry, tmp_path):
+        try:
+            self.progress.close()
+        except Exception:
+            pass
+        thread.quit()
+        thread.wait()
+        worker.deleteLater()
+        thread.deleteLater()
+
+        if not os.path.isfile(tmp_path) or os.path.getsize(tmp_path) <= 0:
+            if not self._secure_purge_file(tmp_path):
+                self._discard_edit_tmp(tmp_path)
+            QMessageBox.critical(
+                self, "Fehler", "Die Datei konnte nicht entschlüsselt werden."
+            )
+            return
+
+        self._open_file_default_app(tmp_path)
+
+        try:
+            st = os.stat(tmp_path)
+            last_stat = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            last_stat = None
+
+        dlg = EditInVaultDialog(self, entry.get("name", "datei"))
+        dlg.sessionFinished.connect(self._end_edit_session)
+
+        self._edit_session = {
+            "index": int(idx),
+            "name": entry.get("name", "datei"),
+            "temp_path": tmp_path,
+            "last_stat": last_stat,
+            "pending_stat": None,
+            "stable_ticks": 0,
+            "missing_ticks": 0,
+            "rewriting": False,
+            "dialog": dlg,
+        }
+        self._edit_poll_timer.start()
+        dlg.show()
+        self.append_log(f"In-Tresor-Bearbeitung gestartet: {entry.get('name', 'datei')}")
+
+    def _edit_decrypt_error(self, error, thread, worker, tmp_path):
+        try:
+            self.progress.close()
+        except Exception:
+            pass
+        thread.quit()
+        thread.wait()
+        worker.deleteLater()
+        thread.deleteLater()
+        if not self._secure_purge_file(tmp_path):
+            self._discard_edit_tmp(tmp_path)
+        QMessageBox.critical(
+            self, "Fehler", f"Entschlüsselung fehlgeschlagen:\n{error}"
+        )
+
+    def _poll_edit_session(self):
+        s = getattr(self, "_edit_session", None)
+        if not s or s.get("rewriting"):
+            return
+        path = s.get("temp_path")
+        if not path:
+            return
+        try:
+            st = os.stat(path)
+            stat = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            s["missing_ticks"] = s.get("missing_ticks", 0) + 1
+            return
+        s["missing_ticks"] = 0
+        if stat == s.get("last_stat"):
+            s["stable_ticks"] = 0
+            return
+        if stat == s.get("pending_stat"):
+            s["stable_ticks"] = s.get("stable_ticks", 0) + 1
+            if s["stable_ticks"] >= 2:  # ~1 s stabil, Editor hat fertig geschrieben
+                self._run_edit_rewrite(s)
+        else:
+            s["pending_stat"] = stat
+            s["stable_ticks"] = 1
+
+    def _run_edit_rewrite(self, s):
+        s["rewriting"] = True
+        s["last_stat"] = s.get("pending_stat")
+        s["pending_stat"] = None
+        s["stable_ticks"] = 0
+
+        dialog = s.get("dialog")
+        if dialog is not None:
+            dialog.allow_close = False
+            dialog.finish_button.setEnabled(False)
+
+        self.stop_event = threading.Event()
+        worker = RewriteEntryWorker(
+            self.container_path,
+            dict(self.meta),
+            s["index"],
+            s["temp_path"],
+            self.master_key,
+            self.flags,
+            stop_event=self.stop_event,
+        )
+        thread = QThread()
+        worker.moveToThread(thread)
+
+        self.progress = QProgressDialog(
+            "Speichere Änderungen im Tresor...", "Abbrechen", 0, 100, self
+        )
+        self.progress.setWindowTitle(f"ANCORATE {edition}")
+        self.progress.canceled.connect(self.cancel_current)
+        worker.progress.connect(self._on_progress)
+        worker.finished.connect(lambda m: self._edit_rewrite_finished(m, thread, worker))
+        worker.error.connect(lambda e: self._edit_rewrite_error(e, thread, worker))
+        thread.started.connect(worker.run)
+        thread.start()
+
+    def _edit_rewrite_finished(self, new_meta, thread, worker):
+        try:
+            self.progress.close()
+        except Exception:
+            pass
+        thread.quit()
+        thread.wait()
+        worker.deleteLater()
+        thread.deleteLater()
+        self.meta = new_meta
+        s = getattr(self, "_edit_session", None)
+        if s:
+            s["rewriting"] = False
+            dialog = s.get("dialog")
+            if dialog is not None:
+                try:
+                    dialog.allow_close = True
+                    dialog.finish_button.setEnabled(True)
+                except Exception:
+                    pass
+            try:
+                st = os.stat(s["temp_path"])
+                s["last_stat"] = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                s["last_stat"] = None
+            self.append_log(f"Änderungen im Tresor gespeichert: {s.get('name')}")
+        try:
+            self.refresh_list()
+        except Exception:
+            pass
+
+    def _edit_rewrite_error(self, error, thread, worker):
+        try:
+            self.progress.close()
+        except Exception:
+            pass
+        thread.quit()
+        thread.wait()
+        worker.deleteLater()
+        thread.deleteLater()
+        s = getattr(self, "_edit_session", None)
+        if s:
+            s["rewriting"] = False
+            dialog = s.get("dialog")
+            if dialog is not None:
+                try:
+                    dialog.allow_close = True
+                    dialog.finish_button.setEnabled(True)
+                except Exception:
+                    pass
+            try:
+                st = os.stat(s["temp_path"])
+                s["last_stat"] = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                s["last_stat"] = None
+        QMessageBox.critical(
+            self,
+            "Fehler",
+            f"Änderungen konnten nicht im Tresor gespeichert werden:\n{error}",
+        )
+        self.append_log(f"Fehler beim Zurückschreiben in den Tresor: {error}")
+
+    def _end_edit_session(self):
+        s = getattr(self, "_edit_session", None)
+        if not s:
+            return
+        self._edit_session = None
+        if self._edit_poll_timer.isActive():
+            self._edit_poll_timer.stop()
+
+        dialog = s.get("dialog")
+        if dialog is not None:
+            try:
+                dialog.sessionFinished.disconnect(self._end_edit_session)
+            except Exception:
+                pass
+            try:
+                dialog.close()
+                dialog.deleteLater()
+            except Exception:
+                pass
+
+        tmp_path = s.get("temp_path")
+        if not self._secure_purge_file(tmp_path):
+            self._discard_edit_tmp(tmp_path)
+        try:
+            self.progress.close()
+        except Exception:
+            pass
+        self.append_log(f"In-Tresor-Bearbeitung beendet: {s.get('name')}")
+
+    def _secure_purge_file(self, path, retries=3, delay=0.5):
+        """Überschreibt eine entschlüsselte Temp-Datei und löscht sie."""
+        if not path or not os.path.exists(path):
+            return True
+        attempts = 0
+        while attempts < retries:
+            try:
+                size = os.path.getsize(path)
+                with open(path, "r+b") as fh:
+                    if size > 0:
+                        remaining = size
+                        chunk = 1024 * 1024
+                        fh.seek(0)
+                        while remaining > 0:
+                            n = min(chunk, remaining)
+                            fh.write(os.urandom(n))
+                            remaining -= n
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                break
+            except OSError:
+                attempts += 1
+                if delay > 0:
+                    time.sleep(delay)
+        try:
+            os.remove(path)
+            return True
+        except OSError:
+            return False
+
+    def _discard_edit_tmp(self, path):
+        """Registriert eine Temp-Datei für spätere Löschversuche."""
+        if os.path.exists(path) and [str(path), 0] not in self._edit_cleanup_pending:
+            self._edit_cleanup_pending.append([str(path), 0])
+            self._schedule_edit_cleanup_retries()
+
+    def _retry_edit_cleanup(self):
+        pending = []
+        for item in self._edit_cleanup_pending:
+            path, attempt = item
+            if not self._secure_purge_file(path, retries=1, delay=0):
+                if attempt < 12:
+                    pending.append([path, attempt + 1])
+                else:
+                    self.append_log(f"Temporäre Datei konnte nicht gelöscht werden: {path}")
+        self._edit_cleanup_pending = pending
+
+    def _schedule_edit_cleanup_retries(self):
+        if not self._edit_cleanup_pending:
+            return
+
+        def _tick():
+            self._retry_edit_cleanup()
+            if self._edit_cleanup_pending:
+                QTimer.singleShot(10000, _tick)
+
+        QTimer.singleShot(10000, _tick)
+
     def export_all(self):
         if self.changing_password or self.password_change_in_progress:
             QMessageBox.information(
@@ -1463,6 +1857,11 @@ Mögliche Ursache
             os.fsync(file_handle.fileno())
 
     def delete_selected(self):
+        if getattr(self, "_edit_session", None):
+            QMessageBox.information(
+                self, "Info", "Schließe zuerst die laufende In-Tresor-Bearbeitung ab."
+            )
+            return
         idx = self._selected_meta_index()
         if idx is None or idx < 0:
             QMessageBox.information(self, "Info", "Bitte eine Datei auswählen.")
@@ -1609,6 +2008,7 @@ Mögliche Ursache
         self.status.setText(txt)
 
     def closeEvent(self, event):
+        self._end_edit_session()
         # Einstellungen neu laden für aktuellen confirm_exit Status
         current_settings = load_settings()
         if current_settings.get("confirm_exit", True):

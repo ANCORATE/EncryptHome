@@ -170,17 +170,19 @@ def get_mac_bytes():
     return int(node).to_bytes(6, "big", signed=False)
 
 
-def get_cpu_id():
+def get_cpu_id(timeout=3):
     import platform
     system = platform.system()
     
     try:
         if system == "Windows":
             # PowerShell First (robust on current Windows, wmic is deprecated)
-            out = run_powershell("(Get-CimInstance Win32_Processor).ProcessorId")
+            out = run_powershell(
+                "(Get-CimInstance Win32_Processor).ProcessorId", timeout=timeout
+            )
             if out:
                 return out
-            out = safe_run("wmic cpu get ProcessorId")
+            out = safe_run("wmic cpu get ProcessorId", timeout=timeout)
             if out:
                 lines = [
                     l.strip() for l in out.splitlines() 
@@ -189,11 +191,11 @@ def get_cpu_id():
                 if lines:
                     return lines[0]
         elif system == "Darwin":  # macOS
-            out = safe_run("sysctl -n machdep.cpu.brand_string")
+            out = safe_run("sysctl -n machdep.cpu.brand_string", timeout=timeout)
             if out:
                 return out.strip()
         elif system == "Linux":
-            out = safe_run("cat /proc/cpuinfo | grep 'model name' | head -1")
+            out = safe_run("cat /proc/cpuinfo | grep 'model name' | head -1", timeout=timeout)
             if out:
                 # Format: "model name      : Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz"
                 parts = out.split(":")
@@ -205,7 +207,7 @@ def get_cpu_id():
     return "unknown-cpu"
 
 
-def get_disk_serial():
+def get_disk_serial(timeout=3):
     import platform
     system = platform.system()
     
@@ -213,11 +215,12 @@ def get_disk_serial():
         if system == "Windows":
             # PowerShell First (robust on current Windows, wmic is deprecated)
             out = run_powershell(
-                "(Get-CimInstance Win32_DiskDrive | Select-Object -First 1).SerialNumber.Trim()"
+                "(Get-CimInstance Win32_DiskDrive | Select-Object -First 1).SerialNumber.Trim()",
+                timeout=timeout,
             )
             if out:
                 return out.splitlines()[0].strip()
-            out = safe_run("wmic diskdrive get SerialNumber")
+            out = safe_run("wmic diskdrive get SerialNumber", timeout=timeout)
             if out:
                 lines = [
                     l.strip() for l in out.splitlines() 
@@ -225,18 +228,18 @@ def get_disk_serial():
                 ]
                 if lines:
                     return lines[0]
-            out = safe_run("vol C:")
+            out = safe_run("vol C:", timeout=timeout)
             if out:
                 return out.replace("\r", "").replace("\n", "").strip()
         elif system == "Darwin":  # macOS
-            out = safe_run("diskutil info / | grep 'Volume UUID'")
+            out = safe_run("diskutil info / | grep 'Volume UUID'", timeout=timeout)
             if out:
                 # Format: "   Volume UUID: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
                 parts = out.split(":")
                 if len(parts) > 1:
                     return parts[1].strip()
         elif system == "Linux":
-            out = safe_run("lsblk -d -o serial -n")
+            out = safe_run("lsblk -d -o serial -n", timeout=timeout)
             if out:
                 lines = [l.strip() for l in out.splitlines() if l.strip()]
                 if lines:
@@ -260,31 +263,100 @@ def save_device_key_hex(key_bytes: bytes):
     pass
 
 
-def device_fingerprint() -> bytes:
-    """Generate consistent device fingerprint from hardware identifiers"""
-    try:
-        mac = get_mac_bytes()
-        cpu = get_cpu_id().encode("utf-8", errors="ignore")
-        dsk = get_disk_serial().encode("utf-8", errors="ignore")
-        
-        # Validate components
-        if len(mac) != 6:
-            print(f"[WARN] Invalid MAC address length: {len(mac)}")
-        if not cpu:
-            print("[WARN] Could not get CPU ID")
-        if not dsk:
-            print("[WARN] Could not get disk serial")
-            
-        raw = b"|".join([b"MAC", mac, b"CPU", cpu, b"DSK", dsk])
-        fp = hashlib.sha256(raw).digest()
+_DEVICE_KEY_SEED = b"ANCORATE_DEVICE_KEY_SEED_2026_STABLE"
 
-        return fp
+
+def _machine_guid() -> str:
+    """Deterministische, installierungsspezifische Windows-Maschinenkennung."""
+    import platform
+    if platform.system() != "Windows":
+        return ""
+    try:
+        import winreg
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography"
+        ) as key:
+            guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+            return str(guid).strip()
+    except Exception as e:
+        print(f"[WARN] MachineGuid could not be read: {e}")
+        return ""
+
+
+def device_fingerprint() -> bytes:
+    """
+    Deterministischer Geräte-Fingerabdruck.
+
+    Bevorzugt die Windows-MachineGuid (fest pro Installation, ohne
+    Subprozesse und damit ohne Timeout-Races). Fallback: MAC-Adresse,
+    sonst Knotenname + Betriebssystem.
+    """
+    try:
+        guid = _machine_guid()
+        if guid:
+            raw = b"GUID|" + guid.encode("utf-8", errors="ignore")
+        else:
+            mac = get_mac_bytes()
+            if len(mac) == 6:
+                raw = b"MAC|" + mac
+            else:
+                import platform
+                raw = f"{platform.node()}|{platform.system()}".encode(
+                    "utf-8", errors="ignore"
+                )
+        return hashlib.sha256(raw).digest()
     except Exception as e:
         print(f"[ERROR] Device fingerprint generation failed: {e}")
-        # Fallback to random but consistent seed
         import platform
         fallback = f"{platform.node()}{platform.system()}".encode("utf-8")
         return hashlib.sha256(fallback).digest()
+
+
+def _legacy_device_fingerprint(cpu_id: str, disk_serial: str) -> bytes:
+    """
+    Rekonstruiert das frühere, zeitabhängige Fingerprint-Schema
+    (MAC + CPU + Disk) aus konkreten Werten. Nur für die Migration
+    bereits erstellter Tresore/Schlüssel.
+    """
+    mac = get_mac_bytes()
+    raw = b"|".join(
+        [
+            b"MAC",
+            mac,
+            b"CPU",
+            str(cpu_id).encode("utf-8", errors="ignore"),
+            b"DSK",
+            str(disk_serial).encode("utf-8", errors="ignore"),
+        ]
+    )
+    return hashlib.sha256(raw).digest()
+
+
+def legacy_device_key_variants() -> list:
+    """
+    Deterministische Schlüsselkandidaten der früheren Ableitung.
+
+    Die alte Ableitung hing von subprozessbasierten Abfragen mit Timeout ab,
+    die zwischen 'unknown-cpu'/'unknown-disk' und den echten Hardwarewerten
+    wechselten. Diese Varianten decken alle plausiblen Kombinationen ab,
+    sodass bereits erstellte gerätegebundene Tresore erneut geöffnet werden
+    können. Bewusst frei von Subprozess-Races (Kandidatensatz ist aus den
+    aktuellen, stabilen Hardwarewerten + festen Platzhalten reproduzierbar).
+    """
+    try:
+        cpu = get_cpu_id(timeout=12)
+        dsk = get_disk_serial(timeout=12)
+    except Exception:
+        cpu, dsk = "unknown-cpu", "unknown-disk"
+
+    variants = []
+    for c in sorted({cpu, "unknown-cpu"}):
+        for d in sorted({dsk, "unknown-disk"}):
+            fp = _legacy_device_fingerprint(c, d)
+            key = hashlib.sha256(fp + _DEVICE_KEY_SEED).digest()
+            if key not in variants:
+                variants.append(key)
+    return variants
 
 
 def generate_device_key() -> bytes:
@@ -293,13 +365,13 @@ def generate_device_key() -> bytes:
     Uses deterministic approach: SHA256(fingerprint + ANCORATE_SEED)
     """
     fp = device_fingerprint()
-    
+
     # Use a fixed seed instead of random secret for consistency
-    seed = b"ANCORATE_DEVICE_KEY_SEED_2026_STABLE"
-    
+    seed = _DEVICE_KEY_SEED
+
     # Generate deterministic key
     device_key = hashlib.sha256(fp + seed).digest()
-    
+
     return device_key
 
 
@@ -318,6 +390,74 @@ def load_device_key() -> bytes:
         print(f"[ERROR] Device key generation failed: {e}")
         # Fallback to empty bytes if fingerprint generation fails
         return b""
+
+
+def load_device_key_candidates() -> list:
+    """
+    Liefert alle plausiblen Geräteschlüssel dieser Maschine.
+
+    Kandidat 0 ist der neue, deterministische Schlüssel. Weitere Kandidaten
+    sind die reproduzierbaren Varianten der früheren, zeitabhängigen
+    Ableitung, damit Tresore aus älteren Versionen weiterhin geöffnet werden
+    können. Reihenfolge deterministisch, ohne Duplikate.
+    """
+    candidates = []
+    try:
+        stable = load_device_key()
+        if stable:
+            candidates.append(stable)
+    except Exception as e:
+        print(f"[WARN] Stable device key unavailable: {e}")
+    for variant in legacy_device_key_variants():
+        if variant and variant not in candidates:
+            candidates.append(variant)
+    return candidates
+
+
+def determine_master_key(pwd, salt, flags, meta_blob):
+    """
+    Bestimmt den Master-Key für einen Tresor.
+
+    - Nicht gerätegebunden: Ableitung nur aus dem Passwort.
+    - Gerätegebunden: zuerst der stabile Geräteschlüssel (ohne Subprozesse);
+      scheitert dessen Entschlüsselung (z.B. Tresor aus einer älteren Version
+      mit zeitabhängiger Ableitung), werden die deterministischen
+      Legacy-Kandidaten probiert.
+
+    Returns Master-Key (bytes) oder None.
+    """
+    try:
+        if not (flags & FLAG_DEVICE):
+            return derive_master_key(pwd, salt, False)
+
+        # 1) Stabiler Schlüssel - fast, ohne Subprozesse.
+        try:
+            stable = load_device_key()
+            if stable:
+                master = derive_master_key(pwd, salt, True, stable)
+                if master is not None:
+                    try:
+                        decrypt_meta(meta_blob, master)  # Validierung
+                        return master
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # 2) Legacy-Kandidaten - nur falls der stabile Schlüssel scheitert.
+        for variant in legacy_device_key_variants():
+            master = derive_master_key(pwd, salt, True, variant)
+            if master is None:
+                continue
+            try:
+                decrypt_meta(meta_blob, master)  # Validierung der Ableitung
+                return master
+            except Exception:
+                continue
+        return None
+    except Exception as e:
+        print(f"[ERROR] Master key determination failed: {e}")
+        return None
 
 
 def is_device_registered() -> bool:
@@ -459,14 +599,13 @@ def rekey_container_password(
 
             # Store re-encrypted blob in file entry for later writing
             file_entry_with_blob = {
-                "name": file_name,
                 "offset": current_offset,
                 "length": len(reencrypted_blob),
-                "size": file_entry.get("size", 0),
-                "blob": reencrypted_blob
+                "blob": reencrypted_blob,
             }
-            if "mtime" in file_entry:
-                file_entry_with_blob["mtime"] = file_entry["mtime"]
+            for k, v in file_entry.items():
+                if k not in ("offset", "length", "blob"):
+                    file_entry_with_blob[k] = v
             new_files.append(file_entry_with_blob)
 
             current_offset += len(reencrypted_blob)
@@ -492,17 +631,13 @@ def rekey_container_password(
     # Create clean metadata without blob fields for JSON serialization
     new_meta_files = []
     for file_entry in new_files:
-        clean_entry = {
-            "name": file_entry["name"],
-            "offset": file_entry["offset"],
-            "length": file_entry["length"],
-            "size": file_entry.get("size", 0)
-        }
-        if "mtime" in file_entry:
-            clean_entry["mtime"] = file_entry["mtime"]
+        clean_entry = dict(file_entry)
+        clean_entry.pop("blob", None)
         new_meta_files.append(clean_entry)
     
     new_meta["files"] = new_meta_files
+    new_meta["modified"] = int(time.time())
+    new_meta.setdefault("format", f"ANCORATE-SALT-{VERSION}")
     new_meta_blob = encrypt_meta(new_meta, new_master)
 
     container_dir = os.path.dirname(container_path) or os.curdir

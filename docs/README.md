@@ -43,6 +43,8 @@ The current code implements:
 - device registration and device-based login
 - password change with container re-encryption
 - secure deletion methods
+- in-vault file editing (double-click opens the decrypted file in the system's default application; saves are re-encrypted back into the vault)
+- extended container/file metadata (modified/opened timestamps, app version, per-file SHA-256 and created/added/edited timestamps)
 
 ### Windows screenshot protection
 

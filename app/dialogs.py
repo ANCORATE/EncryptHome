@@ -770,3 +770,70 @@ class WelcomeOverlay(QDialog):
         )
         self.fade_out.finished.connect(self.accept)
 
+
+class EditInVaultDialog(QDialog):
+    """Nicht-modaler Dialog während einer In-Tresor-Bearbeitung.
+
+    Zeigt an, welche Datei gerade extern bearbeitet wird. Änderungen werden
+    automatisch nach jedem Speichern wieder in den Tresor verschlüsselt.
+    """
+
+    sessionFinished = pyqtSignal()
+    allow_close = True
+
+    def __init__(self, parent: QWidget | None, filename: str):
+        super().__init__(parent)
+        self.setWindowTitle("ANCORATE – In-Tresor-Bearbeitung")
+        self.setWindowIcon(get_app_icon())
+        self.setModal(False)
+        # Tool + StaysOnTop: Der Dialog erscheint nicht in der Taskleiste
+        # und bleibt über allen anderen Fenstern sichtbar, auch wenn der
+        # Editor (z. B. Word) im Vordergrund ist.
+        self.setWindowFlags(
+            Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | (
+                self.windowFlags()
+                & ~Qt.WindowType.WindowContextHelpButtonHint
+                & ~Qt.WindowType.WindowMinimizeButtonHint
+            )
+        )
+        self.resize(360, 150)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(10)
+
+        title = QLabel(f"Datei wird bearbeitet")
+        title.setStyleSheet("font-weight: bold; font-size: 15px;")
+        layout.addWidget(title)
+
+        self._name_label = QLabel(filename)
+        self._name_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self._name_label.setWordWrap(True)
+        layout.addWidget(self._name_label)
+
+        info = QLabel(
+            "Die Datei wurde entschlüsselt und in Ihrer Standardanwendung geöffnet.\n"
+            "Jedes Speichern verschlüsselt die Änderungen automatisch wieder in den Tresor."
+        )
+        info.setWordWrap(True)
+        info.setObjectName("PreviewError")
+        layout.addWidget(info)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        self.finish_button = QPushButton("Bearbeitung abschließen")
+        self.finish_button.clicked.connect(self.close)
+        btn_row.addWidget(self.finish_button)
+        layout.addLayout(btn_row)
+
+    def closeEvent(self, event):
+        if not self.allow_close:
+            event.ignore()
+            return
+        self.sessionFinished.emit()
+        super().closeEvent(event)
+

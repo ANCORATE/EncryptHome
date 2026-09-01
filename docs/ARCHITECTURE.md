@@ -24,6 +24,7 @@ Cryptography / storage
 
 Utilities
  ├── settings.py
+ ├── container_ops.py
  ├── header_utils.py
  ├── checksum_check.py
  ├── sos_delete.py
@@ -142,15 +143,33 @@ write destination file
 
 ```text
 vault entry
- ↓
+  ↓
 PreviewDecryptWorker
- ↓
+  ↓
 decrypt to bytes in memory
- ↓
+  ↓
 LRU preview cache
- ↓
+  ↓
 preview UI
 ```
+
+### In-vault file editing
+
+Double-clicking a vault file starts an in-vault edit session:
+
+```text
+vault entry
+  ↓
+decrypt to temporary file (default application)
+  ↓
+poll temporary file for changes (mtime/size)
+  ↓
+on save: RewriteEntryWorker → replace_entry_in_container
+  ↓
+container rewritten atomically (header + blobs + meta) → refresh list
+```
+
+The temporary plaintext file is overwritten and deleted at the end of the session; locked files are queued for later removal. One edit session can be active at a time, and container-modifying operations are blocked while a session is running. The rewrite keeps the original container intact on cancel or error (atomic `os.replace` of a fully rebuilt container).
 
 ### Password change
 
@@ -170,6 +189,13 @@ Reserved: 6 bytes
 
 The resulting header is 28 bytes. The container then stores encrypted file blobs followed by encrypted metadata and its length information.
 
+The encrypted metadata maps can optionally include:
+
+- container level: `created`, `modified`, `opened`, `flags`, `app_version`, `format`
+- per file: `name`, `size`, `offset`, `length`, `mtime`, `created`, `added`, `edited`, `sha256`
+
+All metadata fields are read defensively with `.get()` so older vaults remain fully usable. Password change (`rekey_container_password`) and the in-vault edit rewrite preserve unknown metadata keys instead of dropping them.
+
 The implementation is authoritative for the exact binary layout. Changes to this format require explicit compatibility work.
 
 ## Utilities
@@ -177,6 +203,10 @@ The implementation is authoritative for the exact binary layout. Changes to this
 ### `utilities/settings.py`
 
 Application settings, settings UI, shortcuts and theme configuration. Only two themes are available (`Standard-dark` / `Standard-White`), both defined centrally in `utilities/themes/standard-*.css` and applied app-wide; legacy theme values are migrated to `Standard-dark`.
+
+### `utilities/container_ops.py`
+
+Qt-independent container operations: SHA-256 of plaintext, metadata-entry construction, and the atomic single-entry replacement used by in-vault editing. It rebuilds the container (header + blobs + meta) into a temporary file and replaces the original only on success.
 
 ### `utilities/header_utils.py`
 
