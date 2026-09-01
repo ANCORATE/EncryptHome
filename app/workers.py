@@ -128,14 +128,19 @@ class AddWorker(QObject):
 
                         newpos = f.tell()
                         blob_len = newpos - offset
-                        meta["files"].append(
-                            {
-                                "name": name,
-                                "size": size,
-                                "offset": offset,
-                                "length": blob_len,
-                            }
-                        )
+                        try:
+                            mtime = int(os.path.getmtime(filepath))
+                        except Exception:
+                            mtime = None
+                        entry = {
+                            "name": name,
+                            "size": size,
+                            "offset": offset,
+                            "length": blob_len,
+                        }
+                        if mtime:
+                            entry["mtime"] = mtime
+                        meta["files"].append(entry)
                         added.append(name)
                         added_paths.append(filepath)
 

@@ -155,6 +155,11 @@ class App(QWidget):
         self.add_menubar()
         
         # ---- File Watcher für sofortige Updates ----
+        # Hinweis: Atome Writes (os.replace) beenden den Watch nach dem ersten
+        # Ereignis. Die direkte Listener-Benachrichtigung (save_settings) ist
+        # deshalb der primäre Weg; der Watcher bleibt für externe Änderungen.
+        self._settings_apply_pending = False
+        register_settings_listener(self._on_settings_saved)
         self.settings_watcher = QFileSystemWatcher([SETTINGS_FILE], self)
         self.settings_watcher.fileChanged.connect(self.on_settings_changed)
         print("[SETTINGS] File Watcher aktiviert für sofortige Updates")
@@ -437,7 +442,7 @@ class App(QWidget):
         try:
             s = load_settings()
             
-            # 1. Theme sofort anwenden
+            # 1. Theme sofort anwenden (inkl. Akzentfarbe + Dichte)
             self.apply_theme(s.get("theme", "Standard-dark"))
             
             # 2. Shortcuts aktualisieren
@@ -445,30 +450,59 @@ class App(QWidget):
             
             # 3. Verhaltens-Einstellungen aktualisieren
             self.apply_behavior_settings(s)
+
+            # 4. Dateilisten-Ansicht aktualisieren
+            self.apply_list_settings(s)
+            self.refresh_list(bool(self.search.text()))
             
         except Exception as e:
             print("[SETTINGS] Fehler beim Anwenden der Einstellungen:", e)
     
     def apply_theme(self, theme_name):
-        """Theme sofort ohne Neustart anwenden"""
+        """Theme sofort ohne Neustart anwenden (Akzentfarbe + Dichte inklusive)"""
         try:
-            base_path = os.path.dirname(os.path.abspath(sys.argv[0]))
-            THEMES = {
-                "Standard-dark": "utilities/themes/standard-dark.css",
-                "Standard-White": "utilities/themes/standard-white.css",
-            }
-            
-            css_file = THEMES.get(theme_name, "utilities/themes/standard-dark.css")
-            css_path = os.path.join(base_path, css_file)
-            
-            if os.path.exists(css_path):
-                with open(css_path, "r", encoding="utf-8") as f:
-                    self.setStyleSheet(f.read())
-                print(f"[SETTINGS] Theme '{theme_name}' angewendet")
-            else:
-                print(f"[SETTINGS] Theme-Datei nicht gefunden: {css_path}")
+            s = load_settings()
+            accent = str(s.get("ui_accent", "") or "")
+            density = str(s.get("ui_density", "Mittel") or "Mittel")
+            self.setStyleSheet(build_stylesheet(theme_name, accent, density))
+            print(f"[SETTINGS] Theme '{theme_name}' angewendet "
+                  f"(Akzent='{accent}', Dichte='{density}')")
         except Exception as e:
             print(f"[SETTINGS] Theme-Fehler: {e}")
+
+    def apply_list_settings(self, settings):
+        """Dateilisten-Ansicht (Liste/Raster, Sortierung) sofort anwenden."""
+        try:
+            grid = settings.get("list_view_mode", "list") == "grid"
+            sort_mode = settings.get("list_sort", "Keine")
+
+            # Vorsicht: Sortierung und Drag&Drop-Reorder (InternalMove)
+            # schliessen sich gegenseitig aus -> nur "Name" sortiert.
+            self.file_list.setViewMode(
+                QListView.ViewMode.IconMode if grid
+                else QListView.ViewMode.ListMode)
+            self.file_list.setSortingEnabled(not grid and sort_mode == "Name")
+
+            if grid:
+                self.file_list.setIconSize(QSize(40, 40))
+                self.file_list.setGridSize(QSize(150, 78))
+                self.file_list.setResizeMode(QListView.ResizeMode.Adjust)
+                self.file_list.setWrapping(True)
+                self.file_list.setSpacing(10)
+                self.file_list.setUniformItemSizes(True)
+                self.file_list.setMovement(QListView.Movement.Free)
+            else:
+                self.file_list.setIconSize(QSize(16, 16))
+                self.file_list.setGridSize(QSize())
+                self.file_list.setWrapping(False)
+                self.file_list.setSpacing(0)
+                self.file_list.setUniformItemSizes(False)
+
+            self._grid_mode = grid
+            print(f"[SETTINGS] Listen-Ansicht: {'Raster' if grid else 'Liste'}, "
+                  f"Sortierung: {sort_mode}")
+        except Exception as e:
+            print(f"[SETTINGS] Listen-Fehler: {e}")
     
     def apply_shortcuts(self, settings):
         """Shortcuts sofort anwenden"""
@@ -501,12 +535,29 @@ class App(QWidget):
         except Exception as e:
             print(f"[SETTINGS] Verhaltens-Fehler: {e}")
     
+    def _schedule_settings_apply(self):
+        """Einstellungen gebündelt (eine 100-ms-Verzögerung) anwenden."""
+        if self._settings_apply_pending:
+            return
+        self._settings_apply_pending = True
+        QTimer.singleShot(100, self._flush_settings_apply)
+
+    def _flush_settings_apply(self):
+        self._settings_apply_pending = False
+        self.apply_settings()
+
+    def _on_settings_saved(self):
+        """Direkte In-Prozess-Benachrichtigung nach erfolgreichem Speichern."""
+        self._schedule_settings_apply()
+
     def on_settings_changed(self, path):
-        """Wird aufgerufen wenn settings.json geändert wird"""
+        """Wird aufgerufen wenn settings.json von außen geändert wird"""
         try:
             print(f"[SETTINGS] Settings-Datei geändert: {path}")
-            # Kleine Verzögerung um sicherzustellen dass Datei komplett geschrieben ist
-            QTimer.singleShot(100, self.apply_settings)
+            # Atome Writes (os.replace) entfernen den Watch -> neu anmelden.
+            if path not in self.settings_watcher.files():
+                self.settings_watcher.addPath(path)
+            self._schedule_settings_apply()
         except Exception as e:
             print(f"[SETTINGS] Watcher-Fehler: {e}")
 
@@ -1601,10 +1652,37 @@ Mögliche Ursache
         return
 
     # ------------------ Dateiliste aktualisieren ------------------
+    def _detail_line(self, name, size_text, ent, show_size, show_date):
+        """Detailzeile gemäß Sichtbarkeits-Einstellungen (Größe/Datum)."""
+        parts = [name]
+        if show_size:
+            parts.append(size_text)
+        if show_date:
+            mtime = ent.get("mtime")
+            if mtime:
+                parts.append(time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime)))
+        return " — ".join(parts)
+
+    def _grid_icon(self):
+        if getattr(self, "_grid_icon_impl", None) is None:
+            self._grid_icon_impl = self.style().standardIcon(
+                QStyle.StandardPixmap.SP_FileIcon)
+        return self._grid_icon_impl
+
     def refresh_list(self, searching: bool = False, intelligence_results=None):
         if getattr(self.file_list, "isEnabled", lambda: True)():
             self.file_list.clear()
             files = self.meta.get("files", [])
+            s = self.data if isinstance(self.data, dict) else {}
+            show_size = bool(s.get("list_show_size", True))
+            show_date = bool(s.get("list_show_date", True))
+            grid = s.get("list_view_mode", "list") == "grid"
+
+            # Sortierung (nur im Listenmodus; Drag&Drop-Reorder verträgt sich
+            # nicht mit aktivem Sortieren)
+            self.file_list.setSortingEnabled(
+                not grid and s.get("list_sort", "Keine") == "Name")
+
             result_mapping = {}
             if intelligence_results:
                 for result in intelligence_results:
@@ -1640,11 +1718,19 @@ Mögliche Ursache
                 elif self.search.text() and searching:
                     if self.search.text().lower() not in name.lower():
                         continue
-                    display_text = f"{name} — {size_text}"
+                    display_text = self._detail_line(
+                        name, size_text, ent, show_size, show_date)
+                elif grid:
+                    # Raster-Modus: kompakte Kachel (nur Name, mittig)
+                    display_text = name
                 else:
-                    display_text = f"{name} — {size_text}"
+                    display_text = self._detail_line(
+                        name, size_text, ent, show_size, show_date)
 
                 item = QListWidgetItem(display_text)
+                if grid:
+                    item.setIcon(self._grid_icon())
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setData(Qt.ItemDataRole.UserRole, idx)
                 self.file_list.addItem(item)
 

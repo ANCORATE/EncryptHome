@@ -31,6 +31,7 @@ from encrypt import *
 from utilities.checksum_check import *
 from utilities.header_utils import *
 from utilities.settings import *
+from utilities.theme_engine import build_stylesheet
 
 # ============================================================
 # Globale Konstanten + Standalone-Helfer (aus main.py)
@@ -464,6 +465,8 @@ def rekey_container_password(
                 "size": file_entry.get("size", 0),
                 "blob": reencrypted_blob
             }
+            if "mtime" in file_entry:
+                file_entry_with_blob["mtime"] = file_entry["mtime"]
             new_files.append(file_entry_with_blob)
 
             current_offset += len(reencrypted_blob)
@@ -495,6 +498,8 @@ def rekey_container_password(
             "length": file_entry["length"],
             "size": file_entry.get("size", 0)
         }
+        if "mtime" in file_entry:
+            clean_entry["mtime"] = file_entry["mtime"]
         new_meta_files.append(clean_entry)
     
     new_meta["files"] = new_meta_files
@@ -775,21 +780,23 @@ theme = load_theme_setting()
 
 DEFAULT_THEME = "Standard-dark"
 
-THEMES = {
-    "Standard-dark": "utilities/themes/standard-dark.css",
-    "Standard-White": "utilities/themes/standard-white.css",
-}
-
-# Default auf dark (Fallback für unbekannte/alte Theme-Werte)
-css_file = THEMES.get(theme, THEMES[DEFAULT_THEME])
-css_path = os.path.join(base_path, css_file)
+def build_app_style():
+    """Qt-Stylesheet fuer das aktuelle Theme + Akzentfarbe + Dichte."""
+    try:
+        s = load_settings()
+    except Exception:
+        s = {}
+    return build_stylesheet(
+        s.get("theme", DEFAULT_THEME),
+        str(s.get("ui_accent", "") or ""),
+        str(s.get("ui_density", "Mittel") or "Mittel"),
+    )
 
 # ---------------------------------------------------------
-# CSS laden
+# CSS laden (Theme + Akzentfarbe + Dichte)
 # ---------------------------------------------------------
 try:
-    with open(css_path, "r", encoding="utf-8") as f:
-        APP_STYLE = f.read()
+    APP_STYLE = build_app_style()
 except Exception as e:
     print(f"CSS loading failed: {e}")
     APP_STYLE = ""

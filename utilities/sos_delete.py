@@ -272,22 +272,20 @@ class SaltScannerUI(QWidget):
 
 def load_stylesheet(app):
     try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
         theme = "Standard-dark"
+        accent = ""
+        density = "Mittel"
         try:
-            # Lazy import, um zirkuläre Imports (settings → sos_delete) zu vermeiden.
+            # Lazy imports, um zirkuläre Imports zu vermeiden.
             from .settings import load_settings
+            from .theme_engine import build_stylesheet
             data = load_settings() or {}
             theme = data.get("theme", theme)
+            accent = str(data.get("ui_accent", "") or "")
+            density = str(data.get("ui_density", "Mittel") or "Mittel")
         except Exception:
             pass
-        themes = {
-            "Standard-dark": "themes/standard-dark.css",
-            "Standard-White": "themes/standard-white.css",
-        }
-        css_file = themes.get(theme, "themes/standard-dark.css")
-        with open(os.path.join(base_dir, css_file), "r", encoding="utf-8") as f:
-            app.setStyleSheet(f.read())
+        app.setStyleSheet(build_stylesheet(theme, accent, density))
     except FileNotFoundError:
         print("running bare-metal")
 

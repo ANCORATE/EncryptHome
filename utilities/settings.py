@@ -85,6 +85,13 @@ DEFAULT_SETTINGS = {
     "del_vault_seq": "Alt+Del",
     # --- Design ---
     "theme": "Standard-dark",
+    "ui_accent": "",  # leer = Theme-Standard, sonst Hex wie "#ff8800"
+    "ui_density": "Mittel",  # Kompakt, Mittel, Komfortabel
+    # --- Design: Dateilisten-Ansicht ---
+    "list_view_mode": "list",  # list, grid
+    "list_show_size": True,
+    "list_show_date": True,
+    "list_sort": "Keine",  # Keine, Name
     # --- Updater (alte Defaults) ---
     "update_url": UPDATE_URL,
     # --- NEU: System & Verhalten ---
@@ -96,7 +103,22 @@ DEFAULT_SETTINGS = {
 
 # ------------------ Settings laden / speichern ------------------
 
-VALID_THEMES = ("Standard-dark", "Standard-White")
+VALID_THEMES = ("Standard-dark", "Standard-White", "High-Contrast", "Midnight Blue")
+VALID_DENSITIES = ("Kompakt", "Mittel", "Komfortabel")
+VALID_LIST_VIEW_MODES = ("list", "grid")
+VALID_LIST_SORTS = ("Keine", "Name")
+
+# Vordefinierte Akzentfarben für den Design-Tab. Leer = Theme-Standard.
+ACCENT_PRESETS = [
+    ("Theme-Standard", ""),
+    ("Blau", "#2f7cf6"),
+    ("Grün", "#10b981"),
+    ("Rot", "#ef4444"),
+    ("Orange", "#f97316"),
+    ("Lila", "#8b5cf6"),
+    ("Gold", "#eab308"),
+    ("Türkis", "#14b8a6"),
+]
 
 
 def _settings_key():
@@ -204,14 +226,55 @@ def load_settings():
     # Alte/entfernte Theme-Werte sicher auf einen gültigen migrieren
     if data.get("theme") not in VALID_THEMES:
         data["theme"] = DEFAULT_SETTINGS["theme"]
+    if data.get("ui_density") not in VALID_DENSITIES:
+        data["ui_density"] = DEFAULT_SETTINGS["ui_density"]
+    if data.get("list_view_mode") not in VALID_LIST_VIEW_MODES:
+        data["list_view_mode"] = DEFAULT_SETTINGS["list_view_mode"]
+    if data.get("list_sort") not in VALID_LIST_SORTS:
+        data["list_sort"] = DEFAULT_SETTINGS["list_sort"]
+    accent = data.get("ui_accent", "")
+    if not isinstance(accent, str) or not (
+        not accent or (accent.startswith("#") and len(accent) in (4, 7))
+    ):
+        data["ui_accent"] = DEFAULT_SETTINGS["ui_accent"]
+    for bool_key in ("list_show_size", "list_show_date"):
+        if not isinstance(data.get(bool_key), bool):
+            data[bool_key] = DEFAULT_SETTINGS[bool_key]
     return data
 
 
 def save_settings(settings: dict):
     try:
         _write_encrypted(settings)
+        _notify_settings_changed()
     except Exception as e:
         print(f"Fehler beim Speichern der Einstellungen: {e}")
+
+
+# ------------------ Settings-Änderungen sofort melden ------------------
+
+# In-Prozess-Listener: Ersetzt die unzuverlässige QFileSystemWatcher-Kette,
+# da atomare Writes (os.replace) den Watch nach dem ersten Ereignis beenden.
+_SETTINGS_LISTENERS: list = []
+
+
+def register_settings_listener(callback):
+    """Registriert einen Callback, der nach jedem erfolgreichen Speichern läuft."""
+    if callback not in _SETTINGS_LISTENERS:
+        _SETTINGS_LISTENERS.append(callback)
+
+
+def unregister_settings_listener(callback):
+    if callback in _SETTINGS_LISTENERS:
+        _SETTINGS_LISTENERS.remove(callback)
+
+
+def _notify_settings_changed():
+    for callback in list(_SETTINGS_LISTENERS):
+        try:
+            callback()
+        except Exception:
+            pass
 
 
 # ------------------ Worker Thread für Changelog ------------------
@@ -535,15 +598,79 @@ class SettingsDialog(QDialog):
         layout.addWidget(lbl)
 
         self.theme_combo = QComboBox()
-        self.theme_combo.addItems(
-            [
-                "Standard-dark",
-                "Standard-White",
-            ]
-        )
+        self.theme_combo.addItems(list(VALID_THEMES))
         self.theme_combo.setCurrentText(self.data.get("theme", "Standard-dark"))
-        self.theme_combo.currentTextChanged.connect(self._save_theme)
         layout.addWidget(self.theme_combo)
+        self.theme_combo.currentTextChanged.connect(self._save_theme)
+
+        # Schriftgröße / Dichte
+        density_row = QHBoxLayout()
+        density_row.addWidget(QLabel("Schriftgröße / Dichte:"))
+        self.density_combo = QComboBox()
+        self.density_combo.addItems(list(VALID_DENSITIES))
+        self.density_combo.setCurrentText(self.data.get("ui_density", "Mittel"))
+        density_row.addWidget(self.density_combo, 1)
+        density_row.addStretch()
+        layout.addLayout(density_row)
+        self.density_combo.currentTextChanged.connect(self._save_density)
+
+        # Akzentfarbe
+        accent_row = QHBoxLayout()
+        accent_row.addWidget(QLabel("Akzentfarbe:"))
+        self.accent_combo = QComboBox()
+        for label, value in ACCENT_PRESETS:
+            self.accent_combo.addItem(label, value)
+        current_accent = str(self.data.get("ui_accent") or "")
+        accent_index = self.accent_combo.findData(current_accent)
+        if accent_index < 0:
+            self.accent_combo.addItem(
+                f"Eigene: {current_accent}" if current_accent else "Standard",
+                current_accent)
+            accent_index = self.accent_combo.count() - 1
+        self.accent_combo.setCurrentIndex(accent_index)
+        accent_row.addWidget(self.accent_combo, 1)
+
+        self.accent_pick_btn = QPushButton("Eigene...")
+        self.accent_pick_btn.clicked.connect(self._pick_accent)
+        accent_row.addWidget(self.accent_pick_btn)
+        layout.addLayout(accent_row)
+        self.accent_combo.currentIndexChanged.connect(self._on_accent_index_changed)
+
+        # Dateilisten-Ansicht
+        list_group = QGroupBox("Dateiliste")
+        list_layout = QVBoxLayout()
+
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Darstellung:"))
+        self.list_mode_combo = QComboBox()
+        self.list_mode_combo.addItem("Liste", "list")
+        self.list_mode_combo.addItem("Raster", "grid")
+        self.list_mode_combo.setCurrentIndex(
+            0 if self.data.get("list_view_mode", "list") == "list" else 1)
+        mode_row.addWidget(self.list_mode_combo)
+        mode_row.addWidget(QLabel("Sortierung:"))
+        self.list_sort_combo = QComboBox()
+        self.list_sort_combo.addItems(list(VALID_LIST_SORTS))
+        self.list_sort_combo.setCurrentText(self.data.get("list_sort", "Keine"))
+        mode_row.addWidget(self.list_sort_combo)
+        mode_row.addStretch()
+        list_layout.addLayout(mode_row)
+
+        self.cb_show_size = QCheckBox("Dateigröße anzeigen")
+        self.cb_show_size.setChecked(bool(self.data.get("list_show_size", True)))
+        list_layout.addWidget(self.cb_show_size)
+
+        self.cb_show_date = QCheckBox("Datum anzeigen")
+        self.cb_show_date.setChecked(bool(self.data.get("list_show_date", True)))
+        list_layout.addWidget(self.cb_show_date)
+
+        list_group.setLayout(list_layout)
+        layout.addWidget(list_group)
+
+        self.list_mode_combo.currentIndexChanged.connect(self._save_list_mode)
+        self.list_sort_combo.currentTextChanged.connect(self._save_list_sort)
+        self.cb_show_size.toggled.connect(self._save_list_show_size)
+        self.cb_show_date.toggled.connect(self._save_list_show_date)
 
         layout.addStretch()
         widget.setLayout(layout)
@@ -929,6 +1056,74 @@ class SettingsDialog(QDialog):
         """Speichert Theme sofort"""
         self.data["theme"] = theme
         save_settings(self.data)
+        self._apply_theme_now()
+
+    def _save_density(self, density):
+        """Speichert Dichte sofort"""
+        self.data["ui_density"] = density
+        save_settings(self.data)
+        self._apply_theme_now()
+
+    def _save_accent(self, accent):
+        """Speichert Akzentfarbe sofort ("" = Theme-Standard)"""
+        self.data["ui_accent"] = str(accent or "")
+        save_settings(self.data)
+        self._apply_theme_now()
+
+    def _on_accent_index_changed(self):
+        self._save_accent(self.accent_combo.currentData())
+
+    def _pick_accent(self):
+        """Eigene Akzentfarbe über QColorDialog wählen."""
+        cur = self.data.get("ui_accent") or ""
+        initial = QColor(cur) if cur else QColor("#2f7cf6")
+        color = QColorDialog.getColor(initial, self, "Akzentfarbe wählen")
+        if not color.isValid():
+            return
+        accent = color.name()
+        self.data["ui_accent"] = accent
+        accent_index = self.accent_combo.findData(accent)
+        if accent_index < 0:
+            self.accent_combo.addItem(f"Eigene: {accent}", accent)
+            accent_index = self.accent_combo.count() - 1
+        self.accent_combo.setCurrentIndex(accent_index)
+        save_settings(self.data)
+        self._apply_theme_now()
+
+    def _save_list_mode(self):
+        """Speichert Listen-/Raster-Modus sofort"""
+        self.data["list_view_mode"] = str(
+            self.list_mode_combo.currentData() or "list")
+        save_settings(self.data)
+
+    def _save_list_sort(self, text):
+        """Speichert Sortierung der Dateiliste sofort"""
+        self.data["list_sort"] = text
+        save_settings(self.data)
+
+    def _save_list_show_size(self, checked):
+        self.data["list_show_size"] = bool(checked)
+        save_settings(self.data)
+
+    def _save_list_show_date(self, checked):
+        self.data["list_show_date"] = bool(checked)
+        save_settings(self.data)
+
+    def _apply_theme_now(self):
+        """Wendet Theme + Akzentfarbe + Dichte sofort app-weit an.
+
+        Lazy import, um zirkuläre Imports zu vermeiden.
+        """
+        try:
+            from .theme_engine import build_stylesheet
+            app = QApplication.instance()
+            if app is not None:
+                app.setStyleSheet(build_stylesheet(
+                    self.data.get("theme", "Standard-dark"),
+                    str(self.data.get("ui_accent", "") or ""),
+                    str(self.data.get("ui_density", "Mittel") or "Mittel")))
+        except Exception as e:
+            print(f"[SETTINGS] Live-Theme-Fehler: {e}")
 
     def _save_shortcuts(self):
         """Speichert alle Shortcuts sofort"""

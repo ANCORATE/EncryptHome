@@ -1,49 +1,50 @@
 /* ============================================================
    ANCORATE EncryptHome – Standard-Dark Theme
    Zentrale Stylesheet-Datei. Niemals in Dialogcode duplizieren.
-   Struktur identisch zu standard-white.css; nur die Farben
-   weichen voneinander ab.
+   Struktur identisch zu allen Theme-Dateien; die Token
+   ({{bg}}, {{accent}}, ...) werden von utilities/theme_engine.py
+   mit den Palettenwerten des gewaehlten Themes befuellt.
    ============================================================ */
 
 QWidget {
     font-family: "Segoe UI", "Roboto", Arial;
     font-size: 13pt;
-    color: #e6eef8;
-    background-color: #0b0f16;
+    color: {{text}};
+    background-color: {{bg}};
 }
 
 QMainWindow, QDialog, QMessageBox {
-    background-color: #0b0f16;
-    color: #e6eef8;
+    background-color: {{bg}};
+    color: {{text}};
 }
 
 /* ------------------------------------------------------------
    Labels
    ------------------------------------------------------------ */
 QLabel {
-    color: #e6eef8;
+    color: {{text}};
     background: transparent;
 }
 
 QLabel#status {
-    color: #9fb0d8;
+    color: {{text-dim}};
     padding: 6px 0;
     font-size: 10pt;
 }
 QLabel#status-secure {
-    color: #10b981;
+    color: {{success}};
     font-weight: 600;
     padding: 6px 0;
     font-size: 10pt;
 }
 QLabel#status-warning {
-    color: #f59e0b;
+    color: {{warning}};
     font-weight: 600;
     padding: 6px 0;
     font-size: 10pt;
 }
 QLabel#status-error {
-    color: #ef4444;
+    color: {{error}};
     font-weight: 600;
     padding: 6px 0;
     font-size: 10pt;
@@ -55,71 +56,71 @@ QLabel#status-error {
 QPushButton {
     padding: 9px 16px;
     border-radius: 10px;
-    border: 1px solid rgba(255,255,255,0.08);
-    background-color: #0f1522;
-    color: #ffffff;
+    border: 1px solid {{border}};
+    background-color: {{surface}};
+    color: {{text}};
     font-weight: 600;
     min-height: 36px;
 }
 QPushButton:hover {
-    background-color: #121a2b;
-    border: 1px solid #2a78ff;
+    background-color: {{surface-hover}};
+    border: 1px solid {{accent-focus}};
 }
 QPushButton:pressed {
-    background-color: #0b1220;
-    border: 1px solid #1f5ed6;
+    background-color: {{surface-pressed}};
+    border: 1px solid {{accent-pressed}};
 }
 QPushButton:disabled {
-    background-color: #0b0f16;
-    color: #3a4152;
-    border: 1px solid #1a1f2a;
+    background-color: {{bg}};
+    color: {{text-disabled}};
+    border: 1px solid {{border-disabled}};
 }
 
 QPushButton#primary {
-    background-color: #2f7cf6;
+    background-color: {{accent}};
     border: none;
-    color: white;
+    color: {{on-accent}};
     font-weight: 700;
 }
 QPushButton#primary:hover {
-    background-color: #3f8cff;
+    background-color: {{accent-hover}};
 }
 QPushButton#primary:pressed {
-    background-color: #2265d1;
+    background-color: {{accent-pressed}};
 }
 
 QPushButton#secondary {
-    background-color: #1a1f2e;
-    border: 1px solid rgba(255,255,255,0.1);
-    color: #cfd8ea;
+    background-color: {{surface-soft}};
+    border: 1px solid {{border-mid}};
+    color: {{text-mid}};
     font-weight: 500;
 }
 QPushButton#secondary:hover {
-    background-color: #252b3d;
-    border-color: rgba(255,255,255,0.2);
+    background-color: {{surface-hover-2}};
+    border-color: {{border-strong}};
 }
 QPushButton#secondary:pressed {
-    background-color: #121622;
+    background-color: {{surface-pressed-2}};
 }
 
 QPushButton#danger {
-    background-color: #dc2626;
+    background-color: {{danger}};
     border: none;
-    color: white;
+    color: {{on-accent}};
     font-weight: 700;
 }
 QPushButton#danger:hover {
-    background-color: #ef4444;
+    background-color: {{danger-hover}};
 }
 QPushButton#danger:pressed {
-    background-color: #b91c1c;
+    background-color: {{danger-pressed}};
 }
 
 /* Dialog-spezifischer Schließen-Button (About/Details) */
 QPushButton#CloseBtn {
-    background-color: #0f1522;
-    color: #cfd8ea;
-    border: 1px solid rgba(255,255,255,0.08);
+    background-color: {{surface}};
+    color: {{text-mid}};
+    border: 1px solid {{border}};
     border-radius: 8px;
     padding: 9px 22px;
     font-size: 13px;
@@ -127,53 +128,53 @@ QPushButton#CloseBtn {
     min-height: 34px;
 }
 QPushButton#CloseBtn:hover {
-    background-color: #121a2b;
-    color: #e6eef8;
-    border-color: #2a78ff;
+    background-color: {{surface-hover}};
+    color: {{text}};
+    border-color: {{accent-focus}};
 }
 QPushButton#CloseBtn:pressed {
-    background-color: #0b1220;
+    background-color: {{surface-pressed}};
 }
 
 /* ------------------------------------------------------------
    Eingaben
    ------------------------------------------------------------ */
 QLineEdit, QComboBox, QListWidget, QTextEdit, QTextBrowser, QPlainTextEdit {
-    background-color: #111827;
+    background-color: {{surface-2}};
     border-radius: 10px;
     padding: 9px 12px;
-    border: 1px solid rgba(255,255,255,0.06);
-    color: #e6eef8;
-    selection-background-color: #2a78ff;
-    selection-color: white;
+    border: 1px solid {{border-soft}};
+    color: {{text}};
+    selection-background-color: {{accent-focus}};
+    selection-color: {{on-accent}};
 }
 QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {
-    border: 1px solid #2a78ff;
-    background-color: #13203a;
+    border: 1px solid {{accent-focus}};
+    background-color: {{surface-focus}};
 }
 QComboBox::drop-down {
     border: none;
     width: 24px;
 }
 QComboBox QAbstractItemView {
-    background-color: #0f1522;
-    border: 1px solid rgba(255,255,255,0.08);
-    color: #e6eef8;
+    background-color: {{surface}};
+    border: 1px solid {{border}};
+    color: {{text}};
 }
 QComboBox QAbstractItemView::item {
     padding: 6px 10px;
 }
 QComboBox QAbstractItemView::item:selected {
-    background-color: #163a73;
-    color: white;
+    background-color: {{accent-soft}};
+    color: {{on-soft}};
 }
 
 QGroupBox {
-    border: 1px solid rgba(255,255,255,0.08);
+    border: 1px solid {{border}};
     border-radius: 10px;
     margin-top: 14px;
     padding: 12px;
-    color: #cfd8ea;
+    color: {{text-mid}};
     font-weight: 600;
     background-color: transparent;
 }
@@ -181,23 +182,23 @@ QGroupBox::title {
     subcontrol-origin: margin;
     left: 12px;
     padding: 0 6px;
-    color: #9fb0d8;
+    color: {{text-dim}};
 }
 
 QCheckBox {
-    color: #e6eef8;
+    color: {{text}};
     spacing: 8px;
 }
 QCheckBox::indicator {
     width: 18px;
     height: 18px;
-    border: 1px solid rgba(255,255,255,0.2);
+    border: 1px solid {{border-strong}};
     border-radius: 4px;
-    background-color: #111827;
+    background-color: {{surface-2}};
 }
 QCheckBox::indicator:checked {
-    background-color: #2f7cf6;
-    border-color: #2f7cf6;
+    background-color: {{accent}};
+    border-color: {{accent}};
 }
 
 QScrollBar:vertical {
@@ -206,12 +207,12 @@ QScrollBar:vertical {
     margin: 0;
 }
 QScrollBar::handle:vertical {
-    background: rgba(255,255,255,0.15);
+    background: {{scroll-handle}};
     border-radius: 6px;
     min-height: 30px;
 }
 QScrollBar::handle:vertical:hover {
-    background: rgba(255,255,255,0.3);
+    background: {{scroll-handle-hover}};
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0;
@@ -222,12 +223,12 @@ QScrollBar:horizontal {
     margin: 0;
 }
 QScrollBar::handle:horizontal {
-    background: rgba(255,255,255,0.15);
+    background: {{scroll-handle}};
     border-radius: 6px;
     min-width: 30px;
 }
 QScrollBar::handle:horizontal:hover {
-    background: rgba(255,255,255,0.3);
+    background: {{scroll-handle-hover}};
 }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     width: 0;
@@ -237,47 +238,47 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
    Listen
    ------------------------------------------------------------ */
 QListWidget {
-    background-color: #111827;
+    background-color: {{surface-2}};
 }
 QListWidget::item {
     padding: 10px 14px;
     margin: 4px 0;
     border-radius: 10px;
     background-color: transparent;
-    color: #e6eef8;
+    color: {{text}};
 }
 QListWidget::item:hover {
-    background-color: rgba(255,255,255,0.04);
+    background-color: {{item-hover}};
 }
 QListWidget::item:selected {
-    background-color: #163a73;
-    color: white;
+    background-color: {{accent-soft}};
+    color: {{on-soft}};
 }
 
 /* ------------------------------------------------------------
    Dialoge & Frames
    ------------------------------------------------------------ */
 QDialog, QProgressDialog {
-    background-color: rgba(15,18,25,0.96);
+    background-color: {{dialog-bg}};
     border-radius: 14px;
-    border: 1px solid rgba(255,255,255,0.07);
+    border: 1px solid {{border-dialog}};
     padding: 14px;
 }
 
 QFrame#Card, QFrame#Section {
-    background-color: #0f1522;
-    border: 1px solid rgba(255,255,255,0.08);
+    background-color: {{surface}};
+    border: 1px solid {{border}};
     border-radius: 8px;
 }
 
 QWidget#Footer {
-    background-color: #0f1522;
-    border-top: 1px solid rgba(255,255,255,0.08);
+    background-color: {{surface}};
+    border-top: 1px solid {{border-mid}};
 }
 
 QWidget#HeaderBar {
-    background-color: #0f1522;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
+    background-color: {{surface}};
+    border-bottom: 1px solid {{border-mid}};
 }
 
 QScrollArea {
@@ -290,7 +291,7 @@ QScrollArea QWidget#Scroll {
 }
 
 QFrame#HSep {
-    background-color: rgba(255,255,255,0.08);
+    background-color: {{border}};
     border: none;
 }
 
@@ -298,9 +299,9 @@ QFrame#HSep {
    Menüs
    ------------------------------------------------------------ */
 QMenu {
-    background-color: rgba(11,15,22,0.98);
-    color: #dcdcdc;
-    border: 1px solid rgba(255,255,255,0.08);
+    background-color: {{menu-bg}};
+    color: {{menu-text}};
+    border: 1px solid {{border-mid}};
     border-radius: 10px;
     padding: 6px;
     font-size: 13px;
@@ -310,19 +311,19 @@ QMenu::item {
     border-radius: 6px;
 }
 QMenu::item:selected {
-    background-color: #1f4fa3;
-    color: white;
+    background-color: {{menu-selected}};
+    color: {{on-soft}};
 }
 QMenu::separator {
     height: 1px;
-    background: rgba(255,255,255,0.08);
+    background: {{menu-sep}};
     margin: 6px 8px;
 }
 
 QToolTip {
-    background-color: #0f1522;
-    color: #e6eef8;
-    border: 1px solid rgba(255,255,255,0.08);
+    background-color: {{surface}};
+    color: {{text}};
+    border: 1px solid {{border}};
     padding: 6px;
 }
 
@@ -332,60 +333,60 @@ QToolTip {
 QLabel#AppName {
     font-size: 22px;
     font-weight: 700;
-    color: #e6eef8;
+    color: {{text}};
     letter-spacing: -0.5px;
 }
 QLabel#AppSub {
     font-size: 12px;
-    color: #9fb0d8;
+    color: {{text-dim}};
     letter-spacing: 0.5px;
 }
 QLabel#SectionHeader {
     font-size: 10px;
     font-weight: 700;
-    color: #2f7cf6;
+    color: {{accent}};
     letter-spacing: 2px;
 }
 QLabel#MetaKey {
     font-size: 12px;
-    color: #9fb0d8;
+    color: {{text-dim}};
 }
 QLabel#MetaValue {
     font-size: 12px;
-    color: #e6eef8;
+    color: {{text}};
     font-weight: 500;
 }
 QLabel#DescText {
     font-size: 12px;
-    color: #cfd8ea;
+    color: {{text-mid}};
 }
 QLabel#Copyright {
     font-size: 11px;
-    color: #9fb0d8;
+    color: {{text-dim}};
 }
 QLabel#DetailLink {
     font-size: 12px;
     font-weight: 600;
-    color: #2f7cf6;
+    color: {{link}};
     text-decoration: underline;
 }
 QLabel#DetailLink:hover {
-    color: #e6eef8;
+    color: {{text}};
 }
 
 QLabel#VersionBadge {
-    background-color: #111827;
-    color: #2f7cf6;
+    background-color: {{surface-2}};
+    color: {{accent}};
     font-size: 10px;
     font-weight: 700;
-    border: 1px solid #2f7cf6;
+    border: 1px solid {{accent}};
     border-radius: 3px;
     padding: 1px 0;
     letter-spacing: 1px;
 }
 
 QLabel#PreviewError {
-    color: #ef4444;
+    color: {{error}};
     font-size: 14px;
     padding: 20px;
 }
@@ -394,15 +395,15 @@ QLabel#PreviewError {
    Passwort-Anforderungs-Labels (dynamische Eigenschaft ok)
    ------------------------------------------------------------ */
 QLabel#Requirement[ok="true"] {
-    color: #6ee7b7;
+    color: {{req-ok}};
     font-size: 11px;
 }
 QLabel#Requirement[ok="false"] {
-    color: #8a8f98;
+    color: {{text-faint}};
     font-size: 11px;
 }
 QLabel#ReqInfo {
-    color: #8a8f98;
+    color: {{text-faint}};
     font-size: 11px;
 }
 
@@ -413,10 +414,10 @@ QLabel#WelcomeTitle {
     font-size: 56px;
     font-weight: 900;
     letter-spacing: 3px;
-    color: #1e88e5;
+    color: {{welcome-title}};
 }
 QLabel#WelcomeSubtitle {
     font-size: 16px;
     letter-spacing: 2px;
-    color: rgba(200, 215, 235, 180);
+    color: {{welcome-sub}};
 }
