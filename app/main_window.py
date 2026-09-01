@@ -232,10 +232,12 @@ class App(QWidget):
         
         # Datei-Menü
         file_menu = QMenu("Datei", self)
+        self.recent_menu = self._build_recent_submenu()
+        file_menu.aboutToShow.connect(self._refresh_recent_submenu)
         actions_file = [
             QAction("Neuer Tresor", self),
             QAction("Tresor öffnen", self),
-            QAction("Zuletzt verwendete Tresore", self),
+            None,  # Platzhalter - wird durch das Recent-Untermenü ersetzt
             QAction("Tresorpasswort ändern", self),
             QAction("Tresor schließen", self),
             QAction("Tresor löschen", self),
@@ -244,13 +246,15 @@ class App(QWidget):
         ]
         actions_file[1].triggered.connect(lambda: self.choose_container(1))
         actions_file[0].triggered.connect(lambda: self.choose_container(2))
-        actions_file[2].triggered.connect(self.show_recent_containers)
         actions_file[3].triggered.connect(self.change_container_password_dialog)
         actions_file[4].triggered.connect(self.close_container)
         actions_file[5].triggered.connect(self.delete_container)
         actions_file[7].triggered.connect(lambda: self.show_settings_dialog())
-        for a in actions_file:
-            if a is None:
+        for i, a in enumerate(actions_file):
+            if i == 2:
+                # „Zuletzt verwendete Tresore" als Untermenü (öffnet bei Hover)
+                file_menu.addMenu(self.recent_menu)
+            elif a is None:
                 file_menu.addSeparator()
             else:
                 file_menu.addAction(a)
@@ -287,87 +291,74 @@ class App(QWidget):
 
     # ------------------ Dialoge ------------------
     def show_recent_containers(self):
-        """Show recent containers dialog"""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Zuletzt verwendete Container")
-        dialog.setWindowIcon(get_app_icon())
-        dialog.setFixedSize(600, 400)
-        dialog.setModal(True)
-        
-        layout = QVBoxLayout(dialog)
-        
-        # Recent containers list
-        list_widget = QListWidget()
+        """Öffnet das 'Zuletzt verwendete Container'-Untermenü (Ctrl+R)."""
+        if hasattr(self, "recent_menu"):
+            self._refresh_recent_submenu()
+            pos = self.mapToGlobal(QPoint(0, 0))
+            self.recent_menu.popup(QPoint(pos.x() + 20, pos.y() + 30))
+        else:
+            QMessageBox.information(
+                self, "Zuletzt verwendet", "Kein Menü verfügbar."
+            )
+
+    def _build_recent_submenu(self):
+        """Erstellt das (leere) Untermenü, das im Datei-Menü bei Hover öffnet."""
+        return QMenu("Zuletzt verwendete Tresore", self)
+
+    def _refresh_recent_submenu(self):
+        """Befüllt das Recent-Untermenü frisch aus den gespeicherten Containern."""
+        if not hasattr(self, "recent_menu"):
+            return
+        menu = self.recent_menu
+        menu.clear()
         containers = load_recent_containers()
-        
-        for container in containers:
-            item = QListWidgetItem(f"📁 {container['name']}")
-            item.setData(Qt.ItemDataRole.UserRole, container["path"])
-            item.setToolTip(container["path"])
-            
-            # Format last accessed time
+        added = False
+        for container in containers if isinstance(containers, list) else []:
+            if not isinstance(container, dict):
+                continue
+            path = container.get("path")
+            if not path:
+                continue
+            name = container.get("name") or os.path.basename(str(path))
             last_accessed = container.get("last_accessed", 0)
+            label = f"📁 {name}"
             if last_accessed:
-                time_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(last_accessed))
-                item.setText(f"📁 {container['name']} - {time_str}")
-            
-            list_widget.addItem(item)
-        
-        if not containers:
-            list_widget.addItem(QListWidgetItem("Keine kürzlichen Container gefunden"))
-        
-        layout.addWidget(list_widget)
-        
-        # Buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        
-        open_btn = QPushButton("Öffnen")
-        open_btn.setObjectName("primary")
-        clear_btn = QPushButton("Liste löschen")
-        clear_btn.setObjectName("danger")
-        cancel_btn = QPushButton("Abbrechen")
-        cancel_btn.setObjectName("secondary")
-        
-        btn_layout.addWidget(open_btn)
-        btn_layout.addWidget(clear_btn)
-        btn_layout.addWidget(cancel_btn)
-        layout.addLayout(btn_layout)
-        
-        # Button handlers
-        def open_selected():
-            selected_items = list_widget.selectedItems()
-            if selected_items:
-                container_path = selected_items[0].data(Qt.ItemDataRole.UserRole)
-                if container_path and os.path.exists(container_path):
-                    self.container_path = container_path
-                    self.container_label.setText(container_path)
-                    self.open_container()
-                    dialog.accept()
-                else:
-                    QMessageBox.warning(dialog, "Fehler", "Container existiert nicht mehr.")
-        
-        def clear_recent():
-            if QMessageBox.question(
-                dialog, "Bestätigen", 
-                "Möchten Sie die Liste der kürzlich genutzten Container wirklich leeren?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            ) == QMessageBox.StandardButton.Yes:
-                save_recent_containers([])
-                list_widget.clear()
-                list_widget.addItem(QListWidgetItem("Liste geleert"))
-        
-        def reject_dialog():
-            dialog.reject()
-        
-        open_btn.clicked.connect(open_selected)
-        clear_btn.clicked.connect(clear_recent)
-        cancel_btn.clicked.connect(reject_dialog)
-        
-        # Double-click to open
-        list_widget.itemDoubleClicked.connect(lambda item: open_selected())
-        
-        dialog.exec()
+                try:
+                    time_str = time.strftime(
+                        "%Y-%m-%d %H:%M", time.localtime(last_accessed)
+                    )
+                    label += f" – {time_str}"
+                except Exception:
+                    pass
+            action = menu.addAction(label)
+            action.setToolTip(str(path))
+            action.setData(path)
+            action.triggered.connect(lambda _=False, p=path: self._open_recent_vault(p))
+            added = True
+        if not added:
+            empty = menu.addAction("Keine kürzlichen Container gefunden")
+            empty.setEnabled(False)
+        menu.addSeparator()
+        clear = menu.addAction("Liste löschen")
+        clear.triggered.connect(self._clear_recent_list)
+
+    def _clear_recent_list(self):
+        reply = QMessageBox.question(
+            self,
+            "Bestätigen",
+            "Möchten Sie die Liste der kürzlich genutzten Container wirklich leeren?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            save_recent_containers([])
+
+    def _open_recent_vault(self, path):
+        if path and os.path.exists(path):
+            self.container_path = path
+            self.container_label.setText(path)
+            self.open_container()
+        else:
+            QMessageBox.warning(self, "Fehler", "Container existiert nicht mehr.")
 
 
     def change_container_password_dialog(self):
@@ -433,13 +424,12 @@ class App(QWidget):
         return pwd
 
     def update_container_path(self, path: str = None):
-        if not self.meta.get("files", ""):
-            self.container_path = path
-            self.container_label.setText(path or "")
-            if path is None:
-                self.status.setText("Tresor-Pfad zurückgesetzt")
-            else:
-                self.status.setText(f"Tresor-Pfad gesetzt: {path}")
+        self.container_path = path
+        self.container_label.setText(path or "")
+        if path is None:
+            self.status.setText("Tresor-Pfad zurückgesetzt")
+        else:
+            self.status.setText(f"Tresor-Pfad gesetzt: {path}")
 
     # ------------------------------------------------------
 
@@ -669,7 +659,7 @@ class App(QWidget):
             self.setWindowTitle(
                 f"ANCORATE {edition} {version} – {file_name} aus {folder_name} geöffnet"
             )
-            self.file_list.enabled = True
+            self.file_list.setEnabled(True)
             self.refresh_list()
 
         except Exception as e:
@@ -791,7 +781,7 @@ class App(QWidget):
             self.setWindowTitle(
                 f"ANCORATE {edition} {version} – {file_name} aus {folder_name} geöffnet"
             )
-            self.file_list.enabled = True
+            self.file_list.setEnabled(True)
             self.refresh_list()
 
         except Exception as e:
@@ -1014,7 +1004,7 @@ Mögliche Ursache
         self._preview_cache.clear()
         self._preview_cache_bytes = 0
         self.file_list.clear()
-        self.file_list.enabled = False
+        self.file_list.setEnabled(False)
         self.search.clear()
         self.searchbar_content = ""
         self.update_container_path()

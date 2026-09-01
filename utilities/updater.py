@@ -205,7 +205,12 @@ class EncryptHomeUpdater:
         data = self.fetch_manifest()
         setup_url = data["url"]
         sha256 = expected_sha256 or data.get("sha256", "")
-        setup_path = os.path.join(self.update_dir, "Update.exe")
+
+        # Installer-Dateiname plattformunabhängig aus der Manifest-URL ableiten
+        url_name = os.path.basename(urlparse(setup_url).path).strip()
+        if not url_name:
+            url_name = "Update.exe" if platform.system() == "Windows" else "Update.AppImage"
+        setup_path = os.path.join(self.update_dir, url_name)
 
         self._download_file(setup_url, setup_path)
 
@@ -232,7 +237,16 @@ class EncryptHomeUpdater:
                 )
             except Exception:
                 subprocess.Popen([setup_path], shell=False)
+        elif platform.system() == "Darwin":
+            # macOS: ausführbar machen; je nach Format korrekt öffnen/installieren
+            os.chmod(setup_path, os.stat(setup_path).st_mode | 0o111)
+            if url_name.lower().endswith((".dmg", ".pkg")):
+                subprocess.Popen(["open", setup_path])
+            else:
+                subprocess.Popen([setup_path])
         else:
+            # Linux: ausführbar machen (AppImage/Deb-Skripte) und starten
+            os.chmod(setup_path, os.stat(setup_path).st_mode | 0o111)
             subprocess.Popen([setup_path])
         sys.exit(0)
 

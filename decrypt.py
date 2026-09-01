@@ -18,8 +18,11 @@ from base import derive_subkey
 
 def decrypt_key(path: str) -> bytes:
     """
-    Reads a legacy keyfile and reverses the optional device-key obfuscation.
-    Returns the real 32-byte AES key.
+    Reads a legacy keyfile and returns the real 32-byte AES key.
+    Deprecated and unused. The previous single-byte device-key "adder"
+    obfuscation was cryptographically unsound and has been removed;
+    legacy keyfiles are read verbatim.
+
     !UNUSED!
     """
     if not os.path.exists(path):
@@ -33,12 +36,7 @@ def decrypt_key(path: str) -> bytes:
             f"Keyfile has invalid length ({len(data)} bytes). Expected 32 bytes for AES-256."
         )
 
-    main_module = sys.modules.get("__main__") or sys.modules.get("main")
-    load_device_key_func = getattr(main_module, "load_device_key", None)
-    device_key = load_device_key_func() if callable(load_device_key_func) else None
-
-    adder = device_key[-1] if device_key else 0
-    return bytes(((b - adder) & 0xFF) for b in data)
+    return data
 
 
 def decrypt_blob_range(

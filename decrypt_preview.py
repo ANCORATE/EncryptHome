@@ -11,6 +11,7 @@ import platform
 import subprocess
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -477,7 +478,11 @@ class PreviewDialog(QDialog):
 
         # Option 2: PyMuPDF (fitz) - sehr beliebte PDF-Bibliothek
         try:
-            import fitz  # PyMuPDF
+            try:
+                # Neuester Paketname (PyMuPDF >= 1.24)
+                import pymupdf as fitz  # type: ignore
+            except ImportError:
+                import fitz  # legacy Alias
 
             doc = fitz.open(stream=data, filetype="pdf")
             if doc.page_count > 0:
@@ -630,6 +635,7 @@ class PreviewDialog(QDialog):
 
     def _open_video_external(self, data: bytes, filename: str):
         """Öffnet Video in temporärer Datei mit Standard-Player"""
+        tmp_path = None
         try:
             suffix = os.path.splitext(filename)[1] or ".mp4"
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -643,17 +649,19 @@ class PreviewDialog(QDialog):
                 subprocess.run(["open", tmp_path])
             else:
                 subprocess.run(["xdg-open", tmp_path])
+
+            self._schedule_tmp_cleanup(tmp_path)
         except Exception as e:
             QMessageBox.warning(
                 self,
                 "Fehler",
                 f"Konnte Video nicht öffnen: {e}\n"
-                f"Temporäre Datei: {tmp_path if 'tmp_path' in locals() else 'N/A'}",
+                f"Temporäre Datei: {tmp_path if tmp_path else 'N/A'}",
             )
-        print("finished opening external")
 
     def _open_pdf_external(self, data: bytes):
         """Öffnet PDF in temporärer Datei mit Standard-Viewer"""
+        tmp_path = None
         try:
             # Temporäre PDF-Datei erstellen
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -668,13 +676,25 @@ class PreviewDialog(QDialog):
                 subprocess.run(["open", tmp_path])
             else:  # Linux
                 subprocess.run(["xdg-open", tmp_path])
+
+            self._schedule_tmp_cleanup(tmp_path)
         except Exception as e:
             QMessageBox.warning(
                 self,
                 "Fehler",
                 f"Konnte PDF nicht öffnen: {e}\n"
-                f"Temporäre Datei: {tmp_path if 'tmp_path' in locals() else 'N/A'}",
+                f"Temporäre Datei: {tmp_path if tmp_path else 'N/A'}",
             )
+
+    def _schedule_tmp_cleanup(self, path: str):
+        """Entfernt die entschlüsselte Temp-Datei später wieder vom Datenträger."""
+        def cleanup():
+            time.sleep(120)
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        threading.Thread(target=cleanup, daemon=True).start()
 
     def _build_binary(self, layout: QVBoxLayout, data: bytes, hint: str = ""):
         text = (

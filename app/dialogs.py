@@ -185,7 +185,6 @@ class FileDropList(QListWidget):
         self.setDragEnabled(True)
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self.enabled = False
 
     def dragEnterEvent(self, event):
         md = event.mimeData()
@@ -202,7 +201,7 @@ class FileDropList(QListWidget):
             event.ignore()
 
     def dropEvent(self, event):
-        if self.enabled:
+        if self.isEnabled():
             md = event.mimeData()
             if md.hasUrls():
                 paths = []

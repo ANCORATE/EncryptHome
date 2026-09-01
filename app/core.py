@@ -60,9 +60,21 @@ LICENSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "license
 MASTER_KEY_LICENSE = b"ueeEu2Qv00JqDFb9K0vbEAL1MQsMRjDEItOMkzYUJwE="  # 32 Bytes fester Schlüssel für Lizenzdatei-Verschlüsselung
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".ancorate")
 
-os.makedirs(CONFIG_DIR, exist_ok=True)
 
-SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
+if os.name == "nt":
+    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", str(Path.home())), "ANCORATE")
+else:
+    CONFIG_DIR = os.path.join(str(Path.home()), ".config", "ANCORATE")
+
+try:
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+except OSError:
+    pass
+
+CONFIG_FILE = os.path.join(CONFIG_DIR, "device.png")
+REGISTRATION_MARKER = os.path.join(CONFIG_DIR, ".registered")
+RECENT_CONTAINERS_FILE = os.path.join(CONFIG_DIR, "recent_containers.json")
+
 ANCORATE_BLUE = "#1e88e5"
 ANCORATE_BLUE_SOFT = "#90caf9"
 BACKGROUND_DARK = "#0b0f14"
@@ -74,15 +86,6 @@ type_edition = "Citadel"
 
 # Prüfe und aktualisiere Checksummen der Systemdateien
 # verify_file_integrity(f"ANCORATE_{edition}_26.2_Build_0009.exe", update=True)
-
-
-if os.name == "nt":
-    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", str(Path.home())), "ANCORATE")
-else:
-    CONFIG_DIR = os.path.join(str(Path.home()), ".config", "ANCORATE")
-CONFIG_FILE = os.path.join(CONFIG_DIR, "device.png")
-REGISTRATION_MARKER = os.path.join(CONFIG_DIR, ".registered")
-RECENT_CONTAINERS_FILE = os.path.join(CONFIG_DIR, "recent_containers.json")
 
 
 def get_app_icon():
@@ -139,6 +142,26 @@ def safe_run(cmd, timeout=1):
         return ""
 
 
+def run_powershell(script, timeout=3):
+    """Führt ein PowerShell-Skript aus und gibt die Ausgabe zurück (Windows)."""
+    try:
+        out = subprocess.check_output(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=timeout,
+        )
+        return out.strip()
+    except Exception:
+        return ""
+
+
 def get_mac_bytes():
     import uuid
 
@@ -152,6 +175,10 @@ def get_cpu_id():
     
     try:
         if system == "Windows":
+            # PowerShell First (robust on current Windows, wmic is deprecated)
+            out = run_powershell("(Get-CimInstance Win32_Processor).ProcessorId")
+            if out:
+                return out
             out = safe_run("wmic cpu get ProcessorId")
             if out:
                 lines = [
@@ -183,6 +210,12 @@ def get_disk_serial():
     
     try:
         if system == "Windows":
+            # PowerShell First (robust on current Windows, wmic is deprecated)
+            out = run_powershell(
+                "(Get-CimInstance Win32_DiskDrive | Select-Object -First 1).SerialNumber.Trim()"
+            )
+            if out:
+                return out.splitlines()[0].strip()
             out = safe_run("wmic diskdrive get SerialNumber")
             if out:
                 lines = [
@@ -204,7 +237,9 @@ def get_disk_serial():
         elif system == "Linux":
             out = safe_run("lsblk -d -o serial -n")
             if out:
-                return out.strip()
+                lines = [l.strip() for l in out.splitlines() if l.strip()]
+                if lines:
+                    return lines[0]
     except Exception as e:
         print(f"[WARN] Disk serial detection failed: {e}")
     
@@ -241,8 +276,7 @@ def device_fingerprint() -> bytes:
             
         raw = b"|".join([b"MAC", mac, b"CPU", cpu, b"DSK", dsk])
         fp = hashlib.sha256(raw).digest()
-        
-        print(f"[DEBUG] Device fingerprint generated successfully")
+
         return fp
     except Exception as e:
         print(f"[ERROR] Device fingerprint generation failed: {e}")
@@ -323,20 +357,25 @@ def save_recent_containers(containers: list):
 
 def add_recent_container(container_path: str):
     """Add container to recent list"""
-    containers = load_recent_containers()
-    
-    # Remove if already exists
-    containers = [c for c in containers if c["path"] != container_path]
-    
-    # Add to beginning
-    recent_entry = {
-        "path": container_path,
-        "name": os.path.basename(container_path),
-        "last_accessed": int(time.time())
-    }
-    containers.insert(0, recent_entry)
-    
-    save_recent_containers(containers)
+    try:
+        containers = load_recent_containers()
+        if not isinstance(containers, list):
+            containers = []
+
+        # Remove if already exists
+        containers = [c for c in containers if not isinstance(c, dict) or c.get("path") != container_path]
+
+        # Add to beginning
+        recent_entry = {
+            "path": container_path,
+            "name": os.path.basename(container_path),
+            "last_accessed": int(time.time())
+        }
+        containers.insert(0, recent_entry)
+
+        save_recent_containers(containers)
+    except Exception as e:
+        print(f"[ERROR] Failed to add recent container: {e}")
 
 def rekey_container_password(
     container_path: str,
@@ -580,10 +619,8 @@ def derive_master_key(
             algorithm=hashes.SHA256(), length=HKDF_LENGTH, salt=salt, info=HKDF_INFO
         ).derive(ikm)
 
-        print(f"[DEBUG] Master key derived successfully")
         return master
     except Exception as e:
-        print(f"[ERROR] Master key derivation failed: {e}")
         raise
 
 
@@ -721,13 +758,8 @@ def make_separator(color=None):
     return line
 
 def load_theme_setting():
-    path = SETTINGS_FILE
-    if not os.path.exists(path):
-        return "Standard-dark"  # Standard-Theme
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data.get("theme", "Standard-dark")
+        return load_settings().get("theme", "Standard-dark")
     except Exception:
         return "Standard-dark"
 

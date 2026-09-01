@@ -51,10 +51,28 @@ def get_app_icon():
 # -----------------------------
 
 def get_all_drives():
+    """Ermittelt alle durchsuchbaren Laufwerks-/Mount-Pfade der Plattform.
+
+    Auf Windows sind device und mountpoint identisch (z.B. C:\\), auf
+    Linux/macOS ist `device` ein Geräteknoten (z.B. /dev/sda1), der nicht
+    durchsucht werden kann - hier wird der Mountpunkt verwendet.
+    """
+    import platform
+    system = platform.system()
     drives = []
+    seen = set()
     for part in psutil.disk_partitions(all=False):
-        if os.path.exists(part.device):
-            drives.append(part.device)
+        if system == "Windows":
+            path = part.device.strip().rstrip("\\/")
+            if path:
+                path += "\\"
+        else:
+            path = part.mountpoint
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if os.path.isdir(path):
+            drives.append(path)
     return drives
 
 
@@ -254,14 +272,15 @@ class SaltScannerUI(QWidget):
 
 def load_stylesheet(app):
     try:
-        import json
         base_dir = os.path.dirname(os.path.abspath(__file__))
         theme = "Standard-dark"
-        settings_path = os.path.join(os.path.expanduser("~"), ".ancorate", "settings.json")
-        if os.path.exists(settings_path):
-            with open(settings_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                theme = data.get("theme", theme)
+        try:
+            # Lazy import, um zirkuläre Imports (settings → sos_delete) zu vermeiden.
+            from .settings import load_settings
+            data = load_settings() or {}
+            theme = data.get("theme", theme)
+        except Exception:
+            pass
         themes = {
             "Standard-dark": "themes/standard-dark.css",
             "Standard-White": "themes/standard-white.css",

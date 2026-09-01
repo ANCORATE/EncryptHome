@@ -55,7 +55,8 @@ def restore_header(input_path: str, output_path: str, salt: bytes, flags: int,
         print("[Info] Vollständiger Header erkannt – wird ersetzt.")
         new_data = data[header_len:]
 
-    with open(output_path, "r+b") as out:
+    # w+b: Ziel sicher erstellen (r+b schlägt fehl, wenn die Datei nicht existiert)
+    with open(output_path, "w+b") as out:
         write_header_func(out, flags, salt)
         out.write(new_data)
 

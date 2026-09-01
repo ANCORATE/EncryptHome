@@ -2,7 +2,6 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 import platform
 
 import requests
@@ -24,8 +23,19 @@ except ImportError:
     EncryptHomeUpdater = None
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".ancorate")
-os.makedirs(CONFIG_DIR, exist_ok=True)
+try:
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+except OSError:
+    pass
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
+
+# --- Einstellungs-Verschlüsselung (Datei wird am Gerät gebunden verschlüsselt) ---
+# Format: MAGIC || encrypt_meta(dict, settings_key)
+# encrypt_meta liefert: nonce(12) || ct+tag || hmac(32)
+_SETTINGS_MAGIC = b"ANC_STG\x01"
+_SETTINGS_SALT = b"ENC_HOME_SETTINGS_V1"
+_SETTINGS_INFO = "ancorate-settings-v1"
+_MIGRATED = False  # einmalige Migration alter Klartext-Dateien pro Prozess
 
 VERSION_YEAR = "26"
 VERSION_FULL = "26.2"
@@ -89,15 +99,102 @@ DEFAULT_SETTINGS = {
 VALID_THEMES = ("Standard-dark", "Standard-White")
 
 
+def _settings_key():
+    """Berechnet den gerätegebundenen Schlüssel für Einstellungen.
+
+    Wird aus dem Geräteschlüssel abgeleitet (Domain-Separation via HKDF),
+    damit Key-Material niemals wiederverwendet wird.
+    Lazy import: app.core importiert utilities.settings - ein Modul-Import
+    von app.core wäre hier ein Zirkularimport.
+    """
+    try:
+        from app.core import generate_device_key
+        dev = generate_device_key()
+        if not isinstance(dev, bytes) or len(dev) not in (16, 24, 32):
+            return None
+        from base import derive_subkey
+        return derive_subkey(dev, _SETTINGS_SALT, _SETTINGS_INFO)
+    except Exception as e:
+        print(f"[WARN] Settings key derivation failed: {e}")
+        return None
+
+
+def _write_encrypted(settings: dict):
+    """Schreibt Einstellungen verschlüsselt (atomar über os.replace)."""
+    key = _settings_key()
+    if not key:
+        raise RuntimeError(
+            "Kein Geräteschlüssel verfügbar - Verschlüsselung der Einstellungen nicht möglich."
+        )
+    from encrypt import encrypt_meta
+
+    blob = encrypt_meta(settings, key)
+    tmp = SETTINGS_FILE + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(_SETTINGS_MAGIC)
+        f.write(blob)
+    os.replace(tmp, SETTINGS_FILE)
+
+
+def _read_settings_raw() -> dict | None:
+    """Liest Einstellungen - verschlüsselt oder (Migration) altes Klartext-JSON."""
+    try:
+        with open(SETTINGS_FILE, "rb") as f:
+            raw = f.read()
+    except Exception:
+        return None
+
+    if raw.startswith(_SETTINGS_MAGIC):
+        blob = raw[len(_SETTINGS_MAGIC):]
+        key = _settings_key()
+        if not key:
+            return None
+        try:
+            from decrypt import decrypt_meta
+            return decrypt_meta(blob, key)
+        except Exception as e:
+            print(f"[ERROR] Settings decryption failed: {e}")
+            return None
+
+    # Legacy: unverschlüsselte Dump-Datei aus früheren Versionen
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _migrate_encrypted(data: dict):
+    """Einmalige Migration einer noch im Klartext vorliegenden settings.json."""
+    global _MIGRATED
+    if _MIGRATED:
+        return
+    _MIGRATED = True
+    try:
+        _write_encrypted(data)
+        print("[Info] Settings erfolgreich auf verschlüsseltes Format migriert.")
+    except Exception as e:
+        print(f"[WARN] Settings-Migration auf verschlüsseltes Format fehlgeschlagen: {e}")
+
+
 def load_settings():
     path = SETTINGS_FILE
     if not os.path.exists(path):
         return DEFAULT_SETTINGS.copy()
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        with open(path, "rb") as f:
+            is_encrypted = f.read(len(_SETTINGS_MAGIC)) == _SETTINGS_MAGIC
     except Exception:
+        is_encrypted = False
+
+    data = _read_settings_raw()
+    if data is None:
         return DEFAULT_SETTINGS.copy()
+    if not isinstance(data, dict):
+        return DEFAULT_SETTINGS.copy()
+
+    if not is_encrypted:
+        # Alte Klartext-Datei: sofort verschlüsseln, der Bestand bleibt nutzbar.
+        _migrate_encrypted(data)
 
     # Fehlende Keys ergänzen
     for k, v in DEFAULT_SETTINGS.items():
@@ -112,10 +209,9 @@ def load_settings():
 
 def save_settings(settings: dict):
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=4)
+        _write_encrypted(settings)
     except Exception as e:
-        print(f"Fehler beim Speichern: {e}")
+        print(f"Fehler beim Speichern der Einstellungen: {e}")
 
 
 # ------------------ Worker Thread für Changelog ------------------
@@ -504,7 +600,7 @@ class SettingsDialog(QDialog):
     def clear_temp_cache(self):
         try:
             temp_dirs = [
-                tempfile.gettempdir(),  # System-Temp
+                os.path.join(BASE_DIR, "update_temp"),  # heruntergeladene Updates
                 os.path.join(os.getcwd(), "cache"),  # App-Cache (falls vorhanden)
             ]
 
