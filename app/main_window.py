@@ -30,6 +30,10 @@ from encrypt import *
 # Utilities
 from utilities.checksum_check import *
 from utilities.header_utils import *
+from utilities.screenshot_protection import (
+    install_screenshot_protection,
+    uninstall_screenshot_protection,
+)
 from utilities.settings import *
 
 from app.core import *
@@ -531,9 +535,22 @@ class App(QWidget):
         """Verhaltens-Einstellungen aktualisieren"""
         try:
             self.data = settings
+            self._apply_screenshot_protection(settings)
             print("[SETTINGS] Verhaltens-Einstellungen aktualisiert")
         except Exception as e:
             print(f"[SETTINGS] Verhaltens-Fehler: {e}")
+
+    def _apply_screenshot_protection(self, settings):
+        """Aktiviert/deaktiviert den Bildschirmaufnahme-Schutz zur Laufzeit."""
+        try:
+            enabled = bool(settings.get("screenshot_protection", True))
+            if enabled:
+                install_screenshot_protection(QApplication.instance())
+            else:
+                uninstall_screenshot_protection(QApplication.instance())
+            print(f"[SETTINGS] Bildschirmaufnahme-Schutz: {'AN' if enabled else 'AUS'}")
+        except Exception as e:
+            print(f"[SETTINGS] Screenshot-Schutz-Fehler: {e}")
     
     def _schedule_settings_apply(self):
         """Einstellungen gebündelt (eine 100-ms-Verzögerung) anwenden."""

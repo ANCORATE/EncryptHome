@@ -53,6 +53,7 @@ def main():
     from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
     from utilities.screenshot_protection import install_screenshot_protection
+    from utilities.settings import load_settings
 
     print(f"ANCORATE {edition} {version} - Initializing...", flush=True)
 
@@ -61,8 +62,10 @@ def main():
     app.setStyleSheet(APP_STYLE)
 
     # Protect EncryptHome-owned windows from supported Windows screen capture APIs.
-    # The helper is a no-op on non-Windows platforms.
-    install_screenshot_protection(app)
+    # The helper is a no-op on non-Windows platforms. Controlled by the
+    # "Bildschirmaufnahmen blockieren" setting in the settings dialog.
+    if load_settings().get("screenshot_protection", True):
+        install_screenshot_protection(app)
 
     # =========================
     # Device registration check

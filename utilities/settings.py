@@ -99,6 +99,7 @@ DEFAULT_SETTINGS = {
     "del_source_added": False,
     # --- NEU: Sicherheit & Pfade ---
     "deletion_method": "Standard",  # Standard, DoD, Gutmann
+    "screenshot_protection": True,
 }
 
 # ------------------ Settings laden / speichern ------------------
@@ -460,6 +461,18 @@ class SettingsDialog(QDialog):
             "Methode zum unwiderruflichen Vernichten von Originaldateien."
         )
         form_sec.addRow(lbl_del, self.combo_deletion)
+
+        self.cb_screenshot_protection = QCheckBox(
+            "Bildschirmaufnahmen blockieren (Windows)"
+        )
+        self.cb_screenshot_protection.setToolTip(
+            "Schützt das Fenster vor Aufzeichnung durch Bildschirmaufnahme-Tools."
+        )
+        self.cb_screenshot_protection.setChecked(
+            self.data.get("screenshot_protection", True)
+        )
+        self.cb_screenshot_protection.stateChanged.connect(self._save_immediate)
+        form_sec.addRow(self.cb_screenshot_protection)
 
         group_security.setLayout(form_sec)
         layout.addWidget(group_security)
@@ -1045,6 +1058,7 @@ class SettingsDialog(QDialog):
         """Speichert Checkbox-Einstellungen sofort"""
         self.data["confirm_exit"] = self.cb_confirm_exit.isChecked()
         self.data["del_source_added"] = self.cb_del_source_added.isChecked()
+        self.data["screenshot_protection"] = self.cb_screenshot_protection.isChecked()
         save_settings(self.data)
     
     def _save_deletion_method(self, text):
