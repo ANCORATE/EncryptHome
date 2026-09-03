@@ -212,7 +212,7 @@ class App(QWidget):
             from utilities.updater import is_newer_version
 
             return is_newer_version(
-                data.get("version", version), version
+                data.get("version", VERSION_FULL), VERSION_FULL
             )
         except Exception:
             return False
@@ -743,8 +743,6 @@ class App(QWidget):
             if master is None:
                 raise ValueError("signature did not match digest")
             meta = decrypt_meta(meta_blob, master)
-            if meta is None:
-                raise ValueError("Metadaten konnten nicht entschlüsselt werden.")
 
             # ------------------------------------------------------------------
             # 6. Werte speichern
@@ -861,8 +859,6 @@ class App(QWidget):
             if master is None:
                 raise ValueError("signature did not match digest")
             meta = decrypt_meta(meta_blob, master)
-            if meta is None:
-                raise ValueError("Metadaten konnten nicht entschlüsselt werden.")
 
             # ------------------------------------------------------------------
             # 6. Werte speichern
@@ -1023,10 +1019,16 @@ Mögliche Ursache
         try:
             self.append_log(f"Vernichtung gestartet (Modus: {method})...")
 
-            # 3. Physisches Überschreiben (Die gesamte Datei)
+            # 3. Physisches Überschreiben (Die gesamte Datei, aber den
+            #    Header überspringen, damit der Tresor lesbar bleibt, falls
+            #    der Vorgang unterbrochen wird)
             file_size = os.path.getsize(c_path)
             with open(c_path, "rb+") as fh:
-                self._secure_overwrite(fh, 0, file_size)
+                # Header überspringen, um Container im Notfall noch lesen zu können
+                data_offset = HEADER_LEN
+                data_length = file_size - data_offset
+                if data_length > 0:
+                    self._secure_overwrite(fh, data_offset, data_length)
 
             # 4. Datei vom Dateisystem entfernen
             os.remove(c_path)
@@ -1156,10 +1158,9 @@ Mögliche Ursache
         # damit ein vorheriger Abbruch (preview/export) neue Adds nicht blockiert.
         self.stop_event = threading.Event()
 
-        # Master‑Key ggf. auf 32 Byte auffüllen
         v2 = self.master_key
-        if len(v2) not in (16, 24, 32):
-            v2 = (v2 + b"\x00" * 32)[:32]
+        if len(v2) != 32:
+            raise ValueError(f"Ungültige Master-Key-Länge: {len(v2)} Bytes (erwartet 32)")
 
         worker = AddWorker(
             self.container_path, files, v2, self.flags, stop_event=self.stop_event
@@ -1450,13 +1451,17 @@ Mögliche Ursache
         thread.start()
 
     def _open_file_default_app(self, path):
-        system = platform.system()
-        if system == "Windows":
-            os.startfile(path)
-        elif system == "Darwin":
-            subprocess.Popen(["open", path])
-        else:
-            subprocess.Popen(["xdg-open", path])
+        try:
+            system = platform.system()
+            if system == "Windows":
+                os.startfile(path)
+            elif system == "Darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+            return True
+        except OSError as e:
+            return False
 
     def _edit_decrypt_finished(self, path, thread, worker, idx, entry, tmp_path):
         try:
@@ -1476,7 +1481,12 @@ Mögliche Ursache
             )
             return
 
-        self._open_file_default_app(tmp_path)
+        opened = self._open_file_default_app(tmp_path)
+        if not opened:
+            self.append_log(
+                "Warnung: Keine Standardanwendung für diese Datei gefunden. "
+                "Öffnen Sie die Datei manuell aus dem Temp-Verzeichnis."
+            )
 
         try:
             st = os.stat(tmp_path)
@@ -1832,6 +1842,7 @@ Mögliche Ursache
 
         total_work = length * passes
         total_written = 0
+        chunks_since_events = 0
 
         for i in range(passes):
             file_handle.seek(offset)
@@ -1846,11 +1857,14 @@ Mögliche Ursache
 
                 # Fortschritt berechnen
                 total_written += current_chunk
+                chunks_since_events += 1
                 if hasattr(self, "progress") and self.progress:
                     prog = int((total_written / total_work) * 100)
                     self.progress.setValue(prog)
 
-                QApplication.processEvents()  # UI am Leben halten
+                if chunks_since_events >= 4:
+                    QApplication.processEvents()
+                    chunks_since_events = 0
 
             # Puffer erzwingen
             file_handle.flush()
@@ -1877,54 +1891,54 @@ Mögliche Ursache
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        # 1. Datei-Metadaten abgreifen
         target = self.meta["files"][int(idx)]
         f_offset = target["offset"]
         f_length = target["length"]
         f_name = target["name"]
 
+        temp_path = None
         try:
-            with open(self.container_path, "rb+") as fh:
-                # --- SCHRITT A: DATEN ÜBERSCHREIBEN ---
-                print("starting")
-                self._secure_overwrite(fh, f_offset, f_length)
+            import tempfile as _tf
+            container_dir = os.path.dirname(os.path.abspath(self.container_path)) or os.curdir
+            with _tf.NamedTemporaryFile(delete=False, dir=container_dir) as tmp:
+                temp_path = tmp.name
 
-                # --- SCHRITT B: CONTAINER KOMPAKTIEREN ---
-                print("squeezing")
-                fh.seek(-8, os.SEEK_END)  # 8 = META_LEN_SIZE
-                old_meta_len = struct.unpack("<Q", fh.read(8))[0]
-                total_size = os.path.getsize(self.container_path)
+            with open(self.container_path, "rb") as src:
+                header = src.read(HEADER_LEN)
 
-                data_end = total_size - old_meta_len - 8
-                next_data_start = f_offset + f_length
-                bytes_to_move = data_end - next_data_start
+                with open(temp_path, "wb") as dst:
+                    dst.write(header)
 
-                if bytes_to_move > 0:
-                    self.append_log("Entferne Überreste...")
-                    fh.seek(next_data_start)
-                    chunk = fh.read(bytes_to_move)
-                    fh.seek(f_offset)
-                    fh.write(chunk)
+                    remaining = f_offset - HEADER_LEN
+                    while remaining > 0:
+                        chunk = src.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise IOError("Unexpected EOF before deleted region")
+                        dst.write(chunk)
+                        remaining -= len(chunk)
 
-                # --- SCHRITT C: METADATEN AKTUALISIEREN ---
-                print("editing meta")
-                # Datei aus Liste löschen
+                    src.seek(f_offset + f_length)
+                    data_end = os.path.getsize(self.container_path) - META_LEN_SIZE
+                    after_deleted = data_end - (f_offset + f_length)
+                    while after_deleted > 0:
+                        chunk = src.read(min(1024 * 1024, after_deleted))
+                        if not chunk:
+                            raise IOError("Unexpected EOF after deleted region")
+                        dst.write(chunk)
+                        after_deleted -= len(chunk)
+
                 self.meta["files"].pop(int(idx))
-
-                # Offsets aller nachfolgenden Dateien korrigieren
                 for f in self.meta["files"]:
                     if f["offset"] > f_offset:
                         f["offset"] -= f_length
 
-                # Container am Ende kürzen
-                new_size = f_offset + bytes_to_move
-                fh.truncate(new_size)
-
-                # Neue Metadaten ans Ende hängen
-                fh.seek(0, os.SEEK_END)
                 new_meta_blob = encrypt_meta(self.meta, self.master_key)
-                fh.write(new_meta_blob)
-                fh.write(struct.pack("<Q", len(new_meta_blob)))
+                with open(temp_path, "ab") as dst:
+                    dst.write(new_meta_blob)
+                    dst.write(struct.pack("<Q", len(new_meta_blob)))
+
+            os.replace(temp_path, self.container_path)
+            temp_path = None
 
             self.append_log(f"Erfolgreich vernichtet: {f_name}")
             self.refresh_list()
@@ -1937,6 +1951,12 @@ Mögliche Ursache
             QMessageBox.critical(
                 self, "Kritischer Fehler", f"Löschvorgang abgebrochen: {e}"
             )
+        finally:
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     # ------------------ Worker Callbacks ------------------
     def _add_finished(self, added, thread, worker):

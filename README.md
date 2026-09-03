@@ -1,6 +1,6 @@
 # ANCORATE EncryptHome
 
-**EncryptHome 26.2 — Citadel**
+**EncryptHome 27 Beta 1 — Capsule**
 
 A local desktop application for encrypted `.salt` vaults, file management, device binding, file preview, secure deletion, and vault integrity checks.
 
@@ -44,9 +44,9 @@ The current GUI also contains LAN-sharing infrastructure in the `App` class. It 
 The code identifies itself as:
 
 ```text
-EncryptHome 26.2
+EncryptHome 27 Beta 1
 Edition: EncryptHome
-Codename: Citadel
+Codename: Capsule
 Container version: 0x09
 ```
 

@@ -1,9 +1,9 @@
 ; Script to generate an ANCORATE EncryptHome Setup.
 
 #define MyAppName "ANCORATE EncryptHome"
-#define MyAppVersion "26.2"
+#define MyAppVersion "27 Beta 1"
 #define MyAppPublisher "ANCORATE software"
-#define MyAppExeName "ANCORATE_EncryptHome_26.2_Build_0009.exe"
+#define MyAppExeName "ANCORATE_EncryptHome_27_Beta_1.exe"
 #define MyAppAssocName "ANCORATE Secure Authentication Layer Technology File"
 #define MyAppAssocExt ".salt"
 #define MyAppAssocKey StringChange(MyAppAssocName, " ", "") + MyAppAssocExt
@@ -33,7 +33,7 @@ InfoAfterFile=dist\Installation erfolgreich abgeschlos.txt
 ;PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=dist\setup_output
-OutputBaseFilename=ANCORATE_EncryptHome_26.2_0009_Setup
+OutputBaseFilename=ANCORATE_EncryptHome_27_Beta_1_Setup
 SetupIconFile=utilities\icon.ico
 SolidCompression=yes
 WizardStyle=modern dynamic windows11

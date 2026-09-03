@@ -48,7 +48,7 @@ def decrypt_blob_range(
     progress_cb=None,
     stop_event: threading.Event | None = None,
 ):
-    if blob_len < (16 + 12 + 16 + 32):
+    if blob_len < (16 + 12 + 16 + 32 + 1):
         raise ValueError("Blob too small")
 
     file_nonce = fh.read(16)
@@ -140,7 +140,7 @@ def decrypt_blob_range(
 def decrypt_meta(blob: bytes, master_key: bytes) -> dict:
     if len(master_key) not in (16, 24, 32):
         raise ValueError(f"master_key length invalid: {len(master_key)} bytes (only 16/24/32 allowed)")
-    if len(blob) < 12 + 32 + 1:
+    if len(blob) < 12 + 16 + 32 + 1:
         raise ValueError("Meta blob invalid or too short")
 
     nonce = blob[:12]

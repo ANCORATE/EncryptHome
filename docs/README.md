@@ -7,7 +7,7 @@ Developer documentation for the ANCORATE EncryptHome desktop application.
 - **Entry point:** `main.py`
 - **Application UI:** PyQt6
 - **Language:** Python 3
-- **Edition:** EncryptHome Citadel
+- **Edition:** EncryptHome Capsule
 - **Container:** `.salt`
 - **License:** Proprietary — © 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
 

@@ -42,8 +42,8 @@ _SETTINGS_INFO = "ancorate-settings-v1"
 _STABLE_SETTINGS_INFO = "ancorate-settings-v2-stable"
 _MIGRATED = False  # einmalige Migration alter Klartext-Dateien pro Prozess
 
-VERSION_YEAR = "26"
-VERSION_FULL = "26.2"
+VERSION_YEAR = "27"
+VERSION_FULL = "27.0-beta.1"
 
 
 def get_app_icon():

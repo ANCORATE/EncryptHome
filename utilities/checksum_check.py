@@ -149,12 +149,21 @@ def log_checksum_action(filename: str, old_checksum: str, new_checksum: str, act
 
 # --- Integritätsprüfung ---
 def verify_file_integrity(file_path: str = None, update=False):
+    """
+    Verify file integrity by checking checksums.
+
+    Returns:
+        True if integrity check passed or file is new.
+        False if user rejected the update (caller should consider aborting).
+    Raises:
+        SystemExit: Only if file_path is missing (critical error).
+    """
     if file_path is None:
         file_path = os.path.abspath(sys.argv[0])
 
     if not os.path.exists(file_path):
         show_warning(f"Die Datei '{file_path}' wurde nicht gefunden.")
-        sys.exit(1)
+        raise FileNotFoundError(f"Integrity check failed: file not found: {file_path}")
 
     checksums = load_checksums()
     new_checksum = calculate_checksum(file_path)
@@ -168,15 +177,15 @@ def verify_file_integrity(file_path: str = None, update=False):
             log_checksum_action(filename, old_checksum, new_checksum, "verified")
 
             if update:
-                want_update = ask_user_confirmation( "Die gespeicherte Checksumme unterscheidet sich von der aktuell signierten Versionsdatei.\n\n" "Möchtest du die neue Checksumme als vertrauenswürdig speichern?\n\n" "→ Ja: Speichert die neue Checksumme (Akzeptiere diese Version).\n" "→ Nein: Die Anwendung wird jetzt beendet (sichere Maßnahme)." )
+                want_update = ask_user_confirmation( "Die gespeicherte Checksumme unterscheidet sich von der aktuell signierten Versionsdatei.\n\n" "Möchtest du die neue Checksumme als vertrauenswürdig speichern?\n\n" "→ Ja: Speichert die neue Checksumme (Akzeptiere diese Version).\n" "→ Nein: Die Anwendung wird beendet (sichere Maßnahme)." )
                 if want_update:
                     checksums[filename] = new_checksum
                     save_checksums(checksums)
                     log_checksum_action(filename, old_checksum, new_checksum, "updated")
                 else:
                     log_checksum_action(filename, old_checksum, new_checksum, "user_rejected")
-                    show_warning("Die Anwendung wird jetzt aus Sicherheitsgründen beendet.")
-                    sys.exit(2)
+                    show_warning("Die Anwendung wird aus Sicherheitsgründen beendet.")
+                    return False
         else:
             # unverändert
             log_checksum_action(filename, old_checksum, new_checksum, "verified")
@@ -186,3 +195,4 @@ def verify_file_integrity(file_path: str = None, update=False):
         save_checksums(checksums)
         log_checksum_action(filename, "", new_checksum, "registered")
         show_info(f"Neue Version registriert und Checksumme gespeichert.\nSie sehen diese Meldung, weil Sie entweder ein Update eingespielt oder ANCORATE Software neu installiert haben.")
+    return True

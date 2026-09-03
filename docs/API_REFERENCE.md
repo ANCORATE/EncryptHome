@@ -661,8 +661,8 @@ Settings management and configuration UI.
 ```python
 CONFIG_DIR = "~/.ancorate" (or platform-specific)
 SETTINGS_FILE = "settings.json"
-VERSION_YEAR = "26"
-VERSION_FULL = "26.2"
+VERSION_YEAR = "27"
+VERSION_FULL = "27.0-beta.1"
 UPDATE_URL = "https://ancorate.github.io/latest/EncryptHome/latest.json"
 ```
 

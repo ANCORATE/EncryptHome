@@ -80,10 +80,10 @@ ANCORATE_BLUE = "#1e88e5"
 ANCORATE_BLUE_SOFT = "#90caf9"
 BACKGROUND_DARK = "#0b0f14"
 
-version = "26.2"  # aktuelle Version der Software, wird in gui angezeigt
-version_year = "26"
+version = "27 Beta 1"  # aktuelle Version der Software, wird in gui angezeigt
+version_year = "27"
 edition = "EncryptHome"  # Edition der Software
-type_edition = "Citadel"
+type_edition = "Capsule"
 
 # Prüfe und aktualisiere Checksummen der Systemdateien
 # verify_file_integrity(f"ANCORATE_{edition}_26.2_Build_0009.exe", update=True)
@@ -837,34 +837,24 @@ def write_header(fh, flags: int, salt: bytes):
 
 def read_header(fh):
     """
-    Liest den Header eines geöffneten Containers und repariert ihn bei Bedarf.
+    Liest den Header eines geöffneten Containers.
+
     fh muss im Read/Write-Modus geöffnet sein.
     Gibt die Felder zurück: (version, flags, salt)
+
+    WICHTIG: Diese Funktion verändert die Datei NICHT. Eine Header-Reparatur
+    würde das Salt ändern und den Tresor dauerhaft unlesbar machen, weil die
+    Metadaten mit dem ursprünglichen Salt verschlüsselt wurden.
     """
     fh.seek(0)
     data = fh.read(HEADER_LEN)
 
-    # Header zu kurz → reparieren
     if len(data) < HEADER_LEN or not data.startswith(MAGIC):
-        print("[WARN] Header beschädigt oder unvollständig. Wird repariert.")
-        salt = os.urandom(SALT_LEN)
-        fh.seek(0)  # Anfang der Datei
-        write_header(fh, FLAG_DEVICE | FLAG_KEYFILE, salt)
-        fh.flush()
-        fh.seek(0)  # wieder an Anfang
-        data = fh.read(HEADER_LEN)  # reparierten Header neu einlesen
+        raise ValueError("Container-Header ist beschädigt oder unvollständig.")
 
-    # Header vollständig → auslesen (data wurde nach einer Reparatur neu gelesen)
     magic, ver, flags, salt, _ = struct.unpack(HEADER_FMT, data)
     if magic != MAGIC:
-        print("[WARN] Ungültige Magic Bytes. Header wird ersetzt.")
-        salt = os.urandom(SALT_LEN)
-        fh.seek(0)
-        write_header(fh, FLAG_DEVICE | FLAG_KEYFILE, salt)
-        fh.flush()
-        fh.seek(0)
-        data = fh.read(HEADER_LEN)  # neu geschriebenen Header lesen
-        _, _, flags, salt, _ = struct.unpack(HEADER_FMT, data)
+        raise ValueError("Ungültige Magic Bytes im Container-Header.")
 
     # Header ok
     return flags, salt

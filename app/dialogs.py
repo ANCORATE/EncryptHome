@@ -432,7 +432,7 @@ class DetailsDialog(QDialog):
         flay = QHBoxLayout(footer)
         flay.setContentsMargins(24, 0, 24, 0)
 
-        hint = QLabel(f"Build  {version}-{version_year}")
+        hint = QLabel(f"Build  {version}")
         hint.setObjectName("Copyright")
 
         btn = QPushButton("Schließen")
@@ -540,7 +540,7 @@ class AboutDialog(QDialog):
         meta.setColumnMinimumWidth(0, 130)
 
         rows = [
-            ("Version", f"{version}  ({version_year} · {type_edition})"),
+            ("Version", f"{version}  ({type_edition})"),
             ("Entwicklung", "Samuel J. Tirwa · Gabriel Leiria-Roussin"),
             ("Lizenz", "Proprietär / Closed Source"),
         ]
