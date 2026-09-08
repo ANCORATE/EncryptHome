@@ -244,6 +244,277 @@ class FileDropList(QListWidget):
                 paths.append(p)
         return paths
 
+    def keyPressEvent(self, event):
+        # Strg+V: Dateien aus der Zwischenablage einfügen (kopierte Dateien)
+        if (
+            self.isEnabled()
+            and event.key() == Qt.Key.Key_V
+            and bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        ):
+            if self._paste_clipboard_files():
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def _paste_clipboard_files(self) -> bool:
+        try:
+            md = QGuiApplication.clipboard().mimeData()
+        except Exception:
+            return False
+        if not md or not md.hasUrls():
+            return False
+        paths = []
+        for url in md.urls():
+            path = url.toLocalFile()
+            if path and os.path.isfile(path):
+                paths.append(path)
+        if not paths:
+            return False
+        self.fileDropped.emit(paths)
+        return True
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        ov = getattr(self, "_overlay", None)
+        if ov is not None and ov.isVisible():
+            self._center_overlay(ov)
+
+    def set_overlay(self, widget):
+        self._overlay = widget
+
+    def _center_overlay(self, ov):
+        x = max(0, (self.width() - ov.width()) // 2)
+        y = max(0, (self.height() - ov.height()) // 2)
+        ov.move(x, y)
+
+
+class Toast(QFrame):
+    """Kompakte, nicht-blockierende Erfolgs-Meldung unten rechts im Fenster.
+
+    Zeitgesteuert ein-/ausblendend (ohne Fenster-Opazität, um Plattform-
+    Einschränkungen wie Wayland zu umgehen) und ohne Maus-Interaktion.
+    Mehrere Toasts stapeln sich nach oben.
+    """
+
+    _stack = []
+
+    def __init__(self, parent, title, message, timeout_ms=3200):
+        super().__init__(parent)
+        self.setObjectName("Toast")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 8, 14, 9)
+        lay.setSpacing(2)
+        self._title_lbl = QLabel(title)
+        self._title_lbl.setObjectName("ToastTitle")
+        self._msg_lbl = QLabel(message)
+        self._msg_lbl.setObjectName("ToastMsg")
+        self._msg_lbl.setWordWrap(True)
+        lay.addWidget(self._title_lbl)
+        lay.addWidget(self._msg_lbl)
+        self.adjustSize()
+        parent_w = self.parentWidget()
+        if parent_w is not None:
+            parent_w.installEventFilter(self)
+        QTimer.singleShot(timeout_ms, self._dismiss)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        Toast._stack.append(self)
+        Toast._move_all()
+        self.raise_()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if self in Toast._stack:
+            Toast._stack.remove(self)
+        Toast._move_all()
+
+    def closeEvent(self, event):
+        if self in Toast._stack:
+            Toast._stack.remove(self)
+        super().closeEvent(event)
+
+    def eventFilter(self, obj, event):
+        if obj is self.parentWidget() and event.type() == QEvent.Type.Resize:
+            self._move_to_corner()
+        return super().eventFilter(obj, event)
+
+    def _move_to_corner(self):
+        parent_w = self.parentWidget()
+        if parent_w is None:
+            return
+        above = [t for t in Toast._stack if t is not self and t.isVisible()]
+        margin = 16
+        x = parent_w.width() - self.width() - margin
+        y = parent_w.height() - self.height() - margin
+        for t in above:
+            y -= t.height() + 8
+        self.move(max(0, x), max(0, y))
+
+    def _dismiss(self):
+        try:
+            self.hide()
+            self.deleteLater()
+        except Exception:
+            pass
+
+    @classmethod
+    def _move_all(cls):
+        for t in cls._stack:
+            try:
+                t._move_to_corner()
+            except Exception:
+                pass
+
+
+class EmptyStateOverlay(QFrame):
+    """Hinweis-Overlay für leere Zustände (kein Tresor / leerer Tresor)."""
+
+    createRequested = pyqtSignal()
+    openRequested = pyqtSignal()
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName("EmptyState")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 20, 24, 20)
+        lay.setSpacing(6)
+        self._title_lbl = QLabel("")
+        self._title_lbl.setObjectName("EmptyStateTitle")
+        self._title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._hint_lbl = QLabel("")
+        self._hint_lbl.setObjectName("EmptyStateHint")
+        self._hint_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._hint_lbl.setWordWrap(True)
+
+        self._btn_create = QPushButton("Neuer Tresor")
+        self._btn_create.setObjectName("EmptyStateBtn")
+        self._btn_create.clicked.connect(self.createRequested)
+        self._btn_open = QPushButton("Tresor öffnen")
+        self._btn_open.setObjectName("EmptyStateBtn")
+        self._btn_open.clicked.connect(self.openRequested)
+        self._btn_row = QHBoxLayout()
+        self._btn_row.addStretch(1)
+        self._btn_row.addWidget(self._btn_create)
+        self._btn_row.addWidget(self._btn_open)
+        self._btn_row.addStretch(1)
+
+        lay.addStretch(1)
+        lay.addWidget(self._title_lbl)
+        lay.addWidget(self._hint_lbl)
+        lay.addSpacing(10)
+        lay.addLayout(self._btn_row)
+        lay.addStretch(1)
+
+        self.set_interactive(False)
+
+    def set_text(self, title, hint, buttons: bool = False):
+        self._title_lbl.setText(title)
+        self._hint_lbl.setText(hint)
+        self.set_interactive(buttons)
+        self.adjustSize()
+
+    def set_interactive(self, interactive: bool):
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive
+        )
+        self._btn_create.setVisible(interactive)
+        self._btn_open.setVisible(interactive)
+        self.setFocusPolicy(
+            Qt.FocusPolicy.StrongFocus if interactive else Qt.FocusPolicy.NoFocus
+        )
+
+
+def show_toast(parent, title, message, timeout_ms=3200):
+    """Zeigt eine kurze Erfolgs-Meldung unten rechts an (nicht-blockierend)."""
+    try:
+        if parent is None:
+            return
+        Toast(parent, title, message, timeout_ms).show()
+    except Exception:
+        pass
+
+
+class OnboardingDialog(QDialog):
+    """Erst-Start-/Hilfe-Dialog: erklärt Sicherheitsmodell & Gerätebindung."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Onboarding")
+        self.setWindowTitle("ANCORATE – Erste Schritte")
+        self.setWindowIcon(get_app_icon())
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.resize(560, 460)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 18)
+        lay.setSpacing(14)
+
+        title = QLabel("Willkommen bei ANCORATE")
+        title.setObjectName("WelcomeTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(title)
+
+        sub = QLabel("Sicher verschlüsselt. Lokal. Gerätegebunden.")
+        sub.setObjectName("WelcomeSubtitle")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(sub)
+
+        sections = [
+            (
+                "VERSCHLÜSSELUNG",
+                "Jeder Tresor wird lokal mit starker AES-Verschlüsselung "
+                "geschützt. Ohne dein Tresor-Passwort kann niemand deine "
+                "Dateien lesen – nicht einmal dieser Rechner.",
+            ),
+            (
+                "GERÄTEBINDUNG",
+                "Der Tresor-Schlüssel ist untrennbar an dieses Gerät und "
+                "dein Anmeldekonto gekoppelt. Ein Tresor lässt sich nur "
+                "auf dem Gerät öffnen, für das er erstellt wurde.",
+            ),
+            (
+                "DATENSCHUTZ",
+                "Es gibt keine Cloud, keine Server und keinen Upload. "
+                "Deine Daten verlassen dein Gerät nie und bleiben genau "
+                "dort, wo du sie ablegst.",
+            ),
+        ]
+        for header, body in sections:
+            h = QLabel(header)
+            h.setObjectName("SectionHeader")
+            b = QLabel(body)
+            b.setObjectName("DescText")
+            b.setWordWrap(True)
+            lay.addWidget(h)
+            lay.addWidget(b)
+
+        lay.addStretch(1)
+
+        tip = QLabel(
+            "Tipp: Einmal eingerichtet, öffnest du deinen Tresor mit Strg+O "
+            "oder über „Zuletzt verwendete Tresore“ im Menü „Datei“."
+        )
+        tip.setObjectName("EmptyStateHint")
+        tip.setWordWrap(True)
+        tip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(tip)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        self.ok_button = QPushButton("Weiter")
+        self.ok_button.setObjectName("primary")
+        self.ok_button.setMinimumWidth(120)
+        self.ok_button.clicked.connect(self.accept)
+        btn_row.addWidget(self.ok_button)
+        btn_row.addStretch(1)
+        lay.addLayout(btn_row)
+
 
 class UpdateNewsDialog(QDialog):
     def __init__(self, parent: QWidget | None, update_data: dict):

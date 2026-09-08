@@ -43,6 +43,27 @@ from app.core import _secure_zero_bytes
 from app.passwords import *
 from app.workers import *
 from app.dialogs import *
+from app.power_lock import PowerLockMonitor
+
+# ============================================================
+# Ordner-Semantik (Phase F)
+# ============================================================
+# Ordner werden als logische Pfade im Feld "name" geführt (z.B.
+# "Ordner/Unterordner/datei.txt"); der Root hat das Präfix "". Die
+# explizite Ordner-Liste liegt als optionale Liste "folders" in der
+# verschlüsselten Meta und wird von allen bestehenden Schreibpfaden
+# unverändert mitgeschrieben.
+FOLDER_SEP = "/"
+
+
+def _folder_of(name: str) -> str:
+    idx = name.rfind(FOLDER_SEP)
+    return name[:idx] if idx >= 0 else ""
+
+
+def _item_name(name: str) -> str:
+    idx = name.rfind(FOLDER_SEP)
+    return name[idx + 1:] if idx >= 0 else name
 # ============================================================
 # Hauptfenster (App-Klasse, aus main.py)
 # ============================================================
@@ -116,6 +137,12 @@ class App(QWidget):
         self.file_list.fileDropped.connect(self.add_files)
         self.layout.addWidget(self.file_list)
 
+        # Ordner-Navigation/-Entfaltung (Sitzungszustand)
+        self.current_folder = ""
+        self._expanded_folders = None  # None = alle Ordner entfaltet
+        self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.file_list.customContextMenuRequested.connect(self._on_folder_context_menu)
+
         # --- Shortcuts ---
         self.create_vault_sc = QShortcut(QKeySequence("Ctrl+N"), self)
         self.add_sec_sc = QShortcut(QKeySequence("Ctrl++"), self)
@@ -127,7 +154,7 @@ class App(QWidget):
         self.search_sc = QShortcut(QKeySequence("Return"), self)
         self.recent_containers_sc = QShortcut(QKeySequence("Ctrl+R"), self)
 
-        self.file_list.itemDoubleClicked.connect(self.start_in_vault_edit)
+        self.file_list.itemDoubleClicked.connect(self._on_item_double_clicked)
 
         # Live-Suche: textChanged feuert im GUI-Thread, sodass keine
         # Qt-Widgets aus einem Hintergrund-Thread angesprochen werden.
@@ -155,6 +182,9 @@ class App(QWidget):
 
         # Hauptfenster für animierte Theme-Wechsel (Fade-Überblendung) anmelden
         register_main_window(self)
+
+        # Geführter Leerzustand zum Start (kein Tresor geöffnet)
+        self._update_empty_state(True)
         
         # ---- Auto-Lock (Inaktivität) ----
         self._auto_lock_timer = QTimer(self)
@@ -166,6 +196,13 @@ class App(QWidget):
         self._auto_lock_app = QApplication.instance()
         if self._auto_lock_app is not None:
             self._auto_lock_app.installEventFilter(self)
+
+        # ---- Schlaf/Screen-Lock: Tresor sofort sperren ----
+        # Nutzt denselben geschützten Sperrpfad wie der Auto-Lock (respektiert
+        # laufende Operationen: Export, Add, Bearbeitung, Passwort-Änderung).
+        self._power_monitor = PowerLockMonitor(self)
+        self._power_monitor.lockRequested.connect(self._auto_lock_triggered)
+        self._power_monitor.start()
 
         self.apply_settings()  # Initial anwenden
         
@@ -278,6 +315,8 @@ class App(QWidget):
         edit_menu = QMenu("Bearbeiten", self)
         actions_edit = [
             QAction("Datei(en) hinzufügen", self),
+            QAction("Neuer Ordner…", self),
+            QAction("In Ordner verschieben…", self),
             QAction("Dateivorschau starten", self),
             QAction("Datei im Tresor bearbeiten", self),
             QAction("Datei löschen", self),
@@ -285,18 +324,23 @@ class App(QWidget):
             QAction("Alles exportieren", self),
         ]
         actions_edit[0].triggered.connect(self.add_file_dialog)
-        actions_edit[1].triggered.connect(self.preview_selected)
-        actions_edit[2].triggered.connect(self.start_in_vault_edit)
-        actions_edit[3].triggered.connect(self.delete_selected)
-        actions_edit[4].triggered.connect(self.export_selected)
-        actions_edit[5].triggered.connect(self.export_all)
+        actions_edit[1].triggered.connect(self._new_folder)
+        actions_edit[2].triggered.connect(lambda: self._move_selected_to_folder(""))
+        actions_edit[3].triggered.connect(self.preview_selected)
+        actions_edit[4].triggered.connect(self.start_in_vault_edit)
+        actions_edit[5].triggered.connect(self.delete_selected)
+        actions_edit[6].triggered.connect(self.export_selected)
+        actions_edit[7].triggered.connect(self.export_all)
         for a in actions_edit:
             edit_menu.addAction(a)
 
         # Hilfe-Menü
         help_menu = QMenu("Hilfe", self)
+        steps_action = QAction("Erste Schritte", self)
+        steps_action.triggered.connect(self.show_onboarding_dialog)
         about_action = QAction(f"Über {edition} {version_year}", self)
         about_action.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(steps_action)
         help_menu.addAction(about_action)
 
         # Menüs hinzufügen
@@ -425,6 +469,10 @@ class App(QWidget):
             self._about_dialog.show()
             self._about_dialog.raise_()
             self._about_dialog.activateWindow()
+
+    def show_onboarding_dialog(self):
+        dlg = OnboardingDialog(self)
+        dlg.exec()
 
     def show_settings_dialog(self):
         if not hasattr(self, "_settings_dialog") or self._settings_dialog is None:
@@ -1160,8 +1208,10 @@ Mögliche Ursache
             self.refresh_list()
             self.append_log(f"Tresor mit {method} erfolgreich vernichtet.")
 
-            QMessageBox.information(
-                self, "Erfolg", f"Der Tresor wurde mit {method} sicher gelöscht."
+            show_toast(
+                self,
+                "Erfolg",
+                f"Der Tresor wurde mit {method} sicher gelöscht.",
             )
 
         except Exception as e:
@@ -1223,10 +1273,13 @@ Mögliche Ursache
         self.exporting = False
         self._preview_cache.clear()
         self._preview_cache_bytes = 0
+        self.current_folder = ""
+        self._expanded_folders = None
         self.file_list.clear()
         self.file_list.setEnabled(False)
         self.search.clear()
         self.searchbar_content = ""
+        self._update_empty_state(True)
         self.update_container_path()
         self.status.setText("Tresor geschlossen.")
         print("Container closed.")
@@ -1273,7 +1326,8 @@ Mögliche Ursache
             raise ValueError(f"Ungültige Master-Key-Länge: {len(v2)} Bytes (erwartet 32)")
 
         worker = AddWorker(
-            self.container_path, files, v2, self.flags, stop_event=add_stop_event
+            self.container_path, files, v2, self.flags, stop_event=add_stop_event,
+            folder=self._target_folder(),
         )
 
         thread = QThread()
@@ -1308,7 +1362,7 @@ Mögliche Ursache
             text = (
                 f"{count} Dateien hinzugefügt." if count > 1 else "Datei hinzugefügt."
             )
-            notifier.show("Verschlüsselung abgeschlossen ✅", text)
+            show_toast(self, "Verschlüsselung abgeschlossen", text)
 
         worker.finished.connect(show_success)
         worker.finished.connect(self.progress.close)
@@ -1372,7 +1426,9 @@ Mögliche Ursache
 
         entry = selected_entries[0]
         if not target_dir:
-            save, _ = QFileDialog.getSaveFileName(self, "Speichere Datei", entry["name"])
+            save, _ = QFileDialog.getSaveFileName(
+                self, "Speichere Datei", _item_name(entry["name"])
+            )
         else:
             save = os.path.join(target_dir, entry["name"])
         if not save:
@@ -1610,7 +1666,7 @@ Mögliche Ursache
         except OSError:
             last_stat = None
 
-        dlg = EditInVaultDialog(self, entry.get("name", "datei"))
+        dlg = EditInVaultDialog(self, _item_name(entry.get("name", "datei")))
         dlg.sessionFinished.connect(self._end_edit_session)
 
         self._edit_session = {
@@ -1944,7 +2000,7 @@ Mögliche Ursache
         self.exporting = False
         if paths:
             self.append_log(f"Export fertig: {len(paths)} Datei(en)")
-            QMessageBox.information(
+            show_toast(
                 self,
                 "Export fertig",
                 f"{len(paths)} Datei(en) wurden exportiert.",
@@ -1952,8 +2008,14 @@ Mögliche Ursache
         else:
             QMessageBox.information(self, "Export fertig", "Keine Dateien exportiert.")
 
-    def _secure_overwrite(self, file_handle, offset, length):
-        """Überschreibt Daten physisch – jetzt inklusive Vaporizer 1 Modus."""
+    def _secure_overwrite(self, file_handle, offset, length, stop_event=None):
+        """Überschreibt Daten physisch – jetzt inklusive Vaporizer 1 Modus.
+
+        Liefert Feedback über 'self.progress' und verarbeitet während der
+        (potenziell sehr langen) Durchgänge laufend Ereignisse, damit der
+        „Abbrechen“-Button des Fortschrittsdialogs tatsächlich reagiert.
+        Beim Abbruch wird RuntimeError("Vorgang abgebrochen") geworfen.
+        """
         method = self.data.get("deletion_method", "Standard")
 
         # Durchgänge festlegen
@@ -1973,14 +2035,19 @@ Mögliche Ursache
 
         total_work = length * passes
         total_written = 0
-        chunks_since_events = 0
 
         for i in range(passes):
+            if stop_event and stop_event.is_set():
+                raise RuntimeError("Vorgang abgebrochen")
+
             file_handle.seek(offset)
             bytes_left = length
             chunk_size = 1024 * 1024  # 1MB Chunks
 
             while bytes_left > 0:
+                if stop_event and stop_event.is_set():
+                    raise RuntimeError("Vorgang abgebrochen")
+
                 current_chunk = min(bytes_left, chunk_size)
                 # Kryptographischer Zufall
                 file_handle.write(secrets.token_bytes(current_chunk))
@@ -1988,10 +2055,14 @@ Mögliche Ursache
 
                 # Fortschritt berechnen
                 total_written += current_chunk
-                chunks_since_events += 1
                 if hasattr(self, "progress") and self.progress:
                     prog = int((total_written / total_work) * 100)
                     self.progress.setValue(prog)
+
+                # Ereignisse verarbeiten, damit Klick/Abbrechen ankommen
+                QApplication.processEvents(
+                    QEventLoop.ProcessEventsFlag.AllEvents, 50
+                )
 
             # Puffer erzwingen
             file_handle.flush()
@@ -2024,6 +2095,7 @@ Mögliche Ursache
         f_name = target["name"]
 
         temp_path = None
+        delete_stop_event = threading.Event()
         try:
             import tempfile as _tf
             container_dir = os.path.dirname(os.path.abspath(self.container_path)) or os.curdir
@@ -2035,12 +2107,18 @@ Mögliche Ursache
             )
             self.progress.setWindowTitle(f"ANCORATE {edition}")
             self.progress.setValue(0)
+            # Ein Abbruch setzt das Stop-Event, das '_secure_overwrite' prüft.
+            self.progress.canceled.connect(delete_stop_event.set)
             self.progress.show()
 
             try:
                 with open(self.container_path, "rb+") as fh:
-                    self._secure_overwrite(fh, f_offset, f_length)
+                    self._secure_overwrite(
+                        fh, f_offset, f_length, stop_event=delete_stop_event
+                    )
             except Exception as ow_err:
+                if delete_stop_event.is_set():
+                    raise RuntimeError("Vorgang abgebrochen") from ow_err
                 self.append_log(f"Warnung: Sicheres Überschreiben fehlgeschlagen: {ow_err}")
 
             try:
@@ -2090,15 +2168,21 @@ Mögliche Ursache
 
             self.append_log(f"Erfolgreich vernichtet: {f_name}")
             self.refresh_list()
-            QMessageBox.information(
-                self, "Erfolg", f"Die Datei wurde unwiderruflich gelöscht."
-            )
+            show_toast(self, "Erfolg", "Die Datei wurde unwiderruflich gelöscht.")
 
         except Exception as e:
-            self.append_log(f"FEHLER beim Löschen: {str(e)}")
-            QMessageBox.critical(
-                self, "Kritischer Fehler", f"Löschvorgang abgebrochen: {e}"
-            )
+            if delete_stop_event.is_set():
+                self.append_log("Löschvorgang abgebrochen")
+                try:
+                    self.progress.close()
+                except Exception:
+                    pass
+                show_toast(self, "Abgebrochen", "Löschvorgang abgebrochen.")
+            else:
+                self.append_log(f"FEHLER beim Löschen: {str(e)}")
+                QMessageBox.critical(
+                    self, "Kritischer Fehler", f"Löschvorgang abgebrochen: {e}"
+                )
         finally:
             if temp_path:
                 try:
@@ -2163,7 +2247,7 @@ Mögliche Ursache
         worker.deleteLater()
         thread.deleteLater()
         self.exporting = False
-        QMessageBox.information(self, "Export fertig", f"Datei gespeichert: {path}")
+        show_toast(self, "Export fertig", f"Datei gespeichert: {path}")
         self.append_log(f"Export fertig: {path}")
 
     def append_log(self, txt):
@@ -2172,6 +2256,12 @@ Mögliche Ursache
 
     def closeEvent(self, event):
         self._end_edit_session()
+
+        # Schlaf-/Lock-Monitor stoppen (optionaler gdbus-Subprozess beenden)
+        try:
+            self._power_monitor.stop()
+        except Exception:
+            pass
 
         # Best effort: clean up any remaining temp files
         for item in list(self._edit_cleanup_pending):
@@ -2195,6 +2285,14 @@ Mögliche Ursache
                 return
 
         event.accept()
+
+        # Letzten sensiblen Schlüssel aus dem Speicher entfernen (Best effort).
+        try:
+            if getattr(self, "master_key", None):
+                _secure_zero_bytes(self.master_key)
+                self.master_key = None
+        except Exception:
+            pass
 
     # ------------------ Worker Callbacks ------------------
     def _on_progress(self, v):
@@ -2242,6 +2340,40 @@ Mögliche Ursache
                 QStyle.StandardPixmap.SP_FileIcon)
         return self._grid_icon_impl
 
+    # ------------------ Geführter Leerzustand ------------------
+    def _ensure_empty_state(self):
+        ov = getattr(self, "_empty_state", None)
+        if ov is None:
+            ov = EmptyStateOverlay(self.file_list)
+            ov.createRequested.connect(lambda: self.choose_container(2))
+            ov.openRequested.connect(lambda: self.choose_container(1))
+            self.file_list.set_overlay(ov)
+            ov.hide()
+            self._empty_state = ov
+        return ov
+
+    def _update_empty_state(self, show: bool):
+        ov = self._ensure_empty_state()
+        if not show:
+            ov.hide()
+            return
+        if self.master_key is not None:
+            title = "Noch keine Dateien in diesem Tresor"
+            hint = (
+                "Füge Dateien per Ziehen & Ablegen, Strg+V oder über das "
+                "Menü „Datei(en) hinzufügen“ (Strg++) hinzu."
+            )
+            ov.set_text(title, hint, buttons=False)
+        else:
+            title = f"Willkommen bei ANCORATE {edition}"
+            hint = (
+                "Öffne einen Tresor (Strg+O), wähle einen zuletzt verwendeten "
+                "im Menü „Datei“, oder erstelle einen neuen (Strg+N)."
+            )
+            ov.set_text(title, hint, buttons=True)
+        ov.show()
+        self.file_list._center_overlay(ov)
+
     def refresh_list(self, searching: bool = False, intelligence_results=None):
         if getattr(self.file_list, "isEnabled", lambda: True)():
             self.file_list.clear()
@@ -2250,62 +2382,493 @@ Mögliche Ursache
             show_size = bool(s.get("list_show_size", True))
             show_date = bool(s.get("list_show_date", True))
             grid = s.get("list_view_mode", "list") == "grid"
+            sort_by_name = s.get("list_sort", "Keine") == "Name"
 
-            # Sortierung (nur im Listenmodus; Drag&Drop-Reorder verträgt sich
-            # nicht mit aktivem Sortieren)
-            self.file_list.setSortingEnabled(
-                not grid and s.get("list_sort", "Keine") == "Name")
+            if searching or intelligence_results:
+                # Suche/KI filtert über den gesamten Tresor (auch Ordner-Inhalte).
+                # Wird VOR dem Raster-Zweig behandelt, damit die Suche in beiden
+                # Ansichten filtert (entspricht dem ursprünglichen Verhalten).
+                self.file_list.setSortingEnabled(False)
+                result_mapping = {}
+                if intelligence_results:
+                    for result in intelligence_results:
+                        fname = result.get("filename")
+                        if fname:
+                            result_mapping[fname] = result
+                        docname = result.get("document_name")
+                        if docname:
+                            result_mapping[docname] = result
 
-            result_mapping = {}
-            if intelligence_results:
-                for result in intelligence_results:
-                    fname = result.get("filename")
-                    if fname:
-                        result_mapping[fname] = result
-                    docname = result.get("document_name")
-                    if docname:
-                        result_mapping[docname] = result
+                for idx, ent in enumerate(files):
+                    name = ent.get("name", "<unnamed>")
+                    size_text = self._size_text(ent.get("size", 0))
 
-            for idx, ent in enumerate(files):
-                name = ent.get("name", "<unnamed>")
-                size = ent.get("size", 0)
+                    if intelligence_results is not None:
+                        result = (result_mapping.get(name)
+                                  or result_mapping.get(_item_name(name)))
+                        if not result:
+                            continue
+                        display_text = (
+                            f"{_item_name(name)} — {size_text} — KI {result['score']:.2f}\n"
+                            f"{result['snippet']}"
+                        )
+                    else:
+                        if self.search.text().lower() not in name.lower():
+                            continue
+                        display_text = self._detail_line(
+                            _item_name(name), size_text, ent, show_size, show_date)
+                    item = QListWidgetItem(display_text)
+                    item.setData(Qt.ItemDataRole.UserRole, idx)
+                    self.file_list.addItem(item)
+                self._update_empty_state(
+                    not searching and not intelligence_results and not files
+                )
+                return
 
-                if size < 1024:
-                    size_text = f"{size} B"
-                elif size < 1024**2:
-                    size_text = f"{size / 1024:.1f} KB"
-                elif size < 1024**3:
-                    size_text = f"{size / 1024**2:.2f} MB"
-                elif size < 1024**4:
-                    size_text = f"{size / 1024**3:.2f} GB"
+            if grid:
+                self._render_grid()
+                self._update_empty_state(False)
+                return
+
+            # Ohne Ordner: klassische flache Ansicht (unverändert), inkl. Widget-Sortierung
+            if not self._all_folders():
+                self.file_list.setSortingEnabled(not grid and sort_by_name)
+                result_mapping = {}
+                if intelligence_results:
+                    for result in intelligence_results:
+                        fname = result.get("filename")
+                        if fname:
+                            result_mapping[fname] = result
+                        docname = result.get("document_name")
+                        if docname:
+                            result_mapping[docname] = result
+
+                for idx, ent in enumerate(files):
+                    name = ent.get("name", "<unnamed>")
+                    size = ent.get("size", 0)
+
+                    if size < 1024:
+                        size_text = f"{size} B"
+                    elif size < 1024**2:
+                        size_text = f"{size / 1024:.1f} KB"
+                    elif size < 1024**3:
+                        size_text = f"{size / 1024**2:.2f} MB"
+                    elif size < 1024**4:
+                        size_text = f"{size / 1024**3:.2f} GB"
+                    else:
+                        size_text = f"{size / 1024**4:.2f} TB"
+
+                    if intelligence_results is not None:
+                        result = result_mapping.get(name)
+                        if not result:
+                            continue
+                        display_text = (
+                            f"{name} — {size_text} — KI {result['score']:.2f}\n"
+                            f"{result['snippet']}"
+                        )
+                    elif self.search.text() and searching:
+                        if self.search.text().lower() not in name.lower():
+                            continue
+                        display_text = self._detail_line(
+                            name, size_text, ent, show_size, show_date)
+                    else:
+                        display_text = self._detail_line(
+                            name, size_text, ent, show_size, show_date)
+
+                    item = QListWidgetItem(display_text)
+                    item.setData(Qt.ItemDataRole.UserRole, idx)
+                    self.file_list.addItem(item)
+
+                self._update_empty_state(
+                    not searching and not intelligence_results and not files
+                )
+                return
+
+            # Ordner-Baumansicht (Listenmodus): Ordner zuerst, dann Root-Dateien
+            self._render_tree(show_size, show_date, sort_by_name)
+            self._update_empty_state(
+                not searching and not intelligence_results and not files
+            )
+
+    # ------------------ Ordner: Datenmodell & Helfer ------------------
+    def _all_folders(self) -> set:
+        """Alle Ordnerpfade: explizit (meta['folders']) plus implizite Eltern."""
+        folders = set(self.meta.get("folders") or [])
+        for ent in self.meta.get("files", []):
+            name = ent.get("name", "")
+            parts = name.split(FOLDER_SEP)[:-1]
+            p = ""
+            for part in parts:
+                p = f"{p}{FOLDER_SEP}{part}" if p else part
+                if p:
+                    folders.add(p)
+        return {f for f in folders if f}
+
+    def _folder_icon(self):
+        if getattr(self, "_folder_icon_impl", None) is None:
+            self._folder_icon_impl = self.style().standardIcon(
+                QStyle.StandardPixmap.SP_DirIcon)
+        return self._folder_icon_impl
+
+    def _child_folders(self, folder: str, folders: set) -> list:
+        prefix = folder + FOLDER_SEP if folder else ""
+        return sorted(
+            (f for f in folders
+             if f.startswith(prefix) and FOLDER_SEP not in f[len(prefix):]),
+            key=str.lower,
+        )
+
+    def _direct_files(self):
+        prefix = self.current_folder + FOLDER_SEP if self.current_folder else ""
+        items = []
+        for idx, ent in enumerate(self.meta.get("files", [])):
+            name = ent.get("name", "")
+            if name.startswith(prefix) and FOLDER_SEP not in name[len(prefix):]:
+                items.append((idx, ent))
+        return items
+
+    def _is_expanded(self, folder: str) -> bool:
+        return self._expanded_folders is None or folder in self._expanded_folders
+
+    def _toggle_folder(self, folder: str):
+        if self._expanded_folders is None:
+            self._expanded_folders = set(self._all_folders())
+        if folder in self._expanded_folders:
+            self._expanded_folders.discard(folder)
+        else:
+            self._expanded_folders.add(folder)
+
+    def _size_text(self, size: int) -> str:
+        if size < 1024:
+            return f"{size} B"
+        if size < 1024**2:
+            return f"{size / 1024:.1f} KB"
+        if size < 1024**3:
+            return f"{size / 1024**2:.2f} MB"
+        if size < 1024**4:
+            return f"{size / 1024**3:.2f} GB"
+        return f"{size / 1024**4:.2f} TB"
+
+    def _folder_item(self, folder: str, depth: int, expanded: bool) -> QListWidgetItem:
+        mark = "\u25bc" if expanded else "\u25b6"  # ▼ / ▶
+        item = QListWidgetItem(("    " * depth) + f"{mark} {_item_name(folder)}")
+        item.setIcon(self._folder_icon())
+        item.setData(Qt.ItemDataRole.UserRole, ("folder", folder))
+        f = QFont(item.font())
+        f.setBold(True)
+        item.setFont(f)
+        return item
+
+    def _render_tree(self, show_size: bool, show_date: bool, sort_by_name: bool):
+        self.file_list.setSortingEnabled(False)
+        folders = self._all_folders()
+        root_folders = self._child_folders("", folders)
+
+        def add_file_row(idx: int, ent: dict, depth: int):
+            name = ent.get("name", "<unnamed>")
+            display = self._detail_line(
+                _item_name(name),
+                self._size_text(ent.get("size", 0)),
+                ent, show_size, show_date,
+            )
+            item = QListWidgetItem(("    " * depth) + display)
+            item.setData(Qt.ItemDataRole.UserRole, idx)
+            self.file_list.addItem(item)
+
+        def add_folder(folder: str, depth: int):
+            expanded = self._is_expanded(folder)
+            self.file_list.addItem(self._folder_item(folder, depth, expanded))
+            if not expanded:
+                return
+            for child in self._child_folders(folder, folders):
+                add_folder(child, depth + 1)
+            prefix = folder + FOLDER_SEP
+            direct = []
+            for idx, ent in enumerate(self.meta.get("files", [])):
+                name = ent.get("name", "")
+                if name.startswith(prefix) and FOLDER_SEP not in name[len(prefix):]:
+                    direct.append((name.lower(), idx, ent))
+            if sort_by_name:
+                direct.sort(key=lambda t: t[0])
+            for _, idx, ent in direct:
+                add_file_row(idx, ent, depth + 1)
+
+        for folder in root_folders:
+            add_folder(folder, 0)
+
+        root_files = []
+        for idx, ent in enumerate(self.meta.get("files", [])):
+            name = ent.get("name", "")
+            if FOLDER_SEP not in name:
+                root_files.append((name.lower(), idx, ent))
+        if sort_by_name:
+            root_files.sort(key=lambda t: t[0])
+        for _, idx, ent in root_files:
+            add_file_row(idx, ent, 0)
+
+    def _render_grid(self):
+        self.file_list.setSortingEnabled(False)
+        s = self.data if isinstance(self.data, dict) else {}
+        show_size = bool(s.get("list_show_size", True))
+        show_date = bool(s.get("list_show_date", True))
+        grid_icon = self._grid_icon()
+
+        def add_tile(text: str, role, icon):
+            item = QListWidgetItem(text)
+            item.setIcon(icon)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            item.setData(Qt.ItemDataRole.UserRole, role)
+            self.file_list.addItem(item)
+
+        if self.current_folder:
+            add_tile("\u2190 Zurück", ("folder_up", _folder_of(self.current_folder)), grid_icon)
+        folders = self._all_folders()
+        prefix = self.current_folder + FOLDER_SEP if self.current_folder else ""
+        for f in sorted(
+            (x for x in folders
+             if x.startswith(prefix) and FOLDER_SEP not in x[len(prefix):]),
+            key=str.lower,
+        ):
+            add_tile(_item_name(f), ("folder", f), self._folder_icon())
+
+        for idx, ent in sorted(self._direct_files(), key=lambda t: t[1].get("name", "").lower()):
+            name = ent.get("name", "<unnamed>")
+            display = self._detail_line(
+                _item_name(name), self._size_text(ent.get("size", 0)), ent,
+                show_size, show_date,
+            )
+            add_tile(display, idx, grid_icon)
+
+    def _on_item_double_clicked(self, item):
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(data, tuple) and len(data) == 2:
+            kind, path = data
+            if kind == "folder":
+                s = self.data if isinstance(self.data, dict) else {}
+                if s.get("list_view_mode", "list") == "grid":
+                    self.current_folder = path
                 else:
-                    size_text = f"{size / 1024**4:.2f} TB"
+                    self._toggle_folder(path)
+                self.refresh_list()
+                return
+            if kind == "folder_up":
+                self.current_folder = path
+                self.refresh_list()
+                return
+        self.start_in_vault_edit()
 
-                if intelligence_results is not None:
-                    result = result_mapping.get(name)
-                    if not result:
-                        continue
-                    display_text = (
-                        f"{name} — {size_text} — KI {result['score']:.2f}\n"
-                        f"{result['snippet']}"
-                    )
-                elif self.search.text() and searching:
-                    if self.search.text().lower() not in name.lower():
-                        continue
-                    display_text = self._detail_line(
-                        name, size_text, ent, show_size, show_date)
-                elif grid:
-                    # Raster-Modus: kompakte Kachel (nur Name, mittig)
-                    display_text = name
-                else:
-                    display_text = self._detail_line(
-                        name, size_text, ent, show_size, show_date)
+    def _target_folder(self) -> str:
+        """Ordner-Zielkontext für Hinzufügen (Auswahl ↝ Ordner ↝ aktueller)."""
+        item = self.file_list.currentItem()
+        if item is not None:
+            data = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(data, tuple) and len(data) == 2 and data[0] == "folder":
+                return data[1]
+            if isinstance(data, int):
+                try:
+                    return _folder_of(self.meta["files"][data].get("name", ""))
+                except Exception:
+                    pass
+        s = self.data if isinstance(self.data, dict) else {}
+        if s.get("list_view_mode", "list") == "grid":
+            return self.current_folder
+        return ""
 
-                item = QListWidgetItem(display_text)
-                if grid:
-                    item.setIcon(self._grid_icon())
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                item.setData(Qt.ItemDataRole.UserRole, idx)
-                self.file_list.addItem(item)
+    def _on_folder_context_menu(self, pos):
+        item = self.file_list.itemAt(pos)
+        if item is None:
+            return
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if not (isinstance(data, tuple) and len(data) == 2 and data[0] == "folder"):
+            return
+        folder = data[1]
+        menu = QMenu(self)
+        act_rename = menu.addAction("Ordner umbenennen…")
+        act_delete = menu.addAction("Ordner löschen")
+        act_move = menu.addAction("Ausgewählte Dateien hierher verschieben")
+        act_move.setEnabled(bool(self.file_list.selectedItems()))
+        chosen = menu.exec(self.file_list.viewport().mapToGlobal(pos))
+        if chosen == act_rename:
+            self._rename_folder(folder)
+        elif chosen == act_delete:
+            self._delete_folder(folder)
+        elif chosen == act_move:
+            self._move_selected_to_folder(folder)
+
+    def _new_folder(self):
+        if not self.master_key or not self.container_path:
+            QMessageBox.information(self, "Info", "Bitte zuerst einen Tresor öffnen.")
+            return
+        target = self._target_folder()
+        base = f"{target}{FOLDER_SEP}" if target else ""
+        name, ok = QInputDialog.getText(
+            self, "Neuer Ordner", "Ordnername (verschachtelt möglich, z.B. A/B):",
+            text="Neuer Ordner",
+        )
+        if not ok or not name.strip():
+            return
+        path = f"{base}{name.strip().strip(FOLDER_SEP)}"
+        folders = set(self.meta.get("folders") or [])
+        folders.add(path)
+        self.meta["folders"] = sorted(folders, key=str.lower)
+        self._save_meta()
+        self.current_folder = path
+        if self._expanded_folders is None:
+            self._expanded_folders = set(self._all_folders())
+        self._expanded_folders.add(_folder_of(path))
+        self._expanded_folders.add(path)
+        self.refresh_list()
+        show_toast(self, "Ordner erstellt", path)
+
+    def _move_selected_to_folder(self, target: str):
+        idxs = self._selected_meta_indexes()
+        if not idxs:
+            QMessageBox.information(self, "Verschieben", "Bitte zuerst Dateien auswählen.")
+            return
+        if target == "":
+            folders_now = sorted(self._all_folders(), key=str.lower)
+            choices = folders_now + ["(Root)"]
+            current, ok = QInputDialog.getItem(
+                self, "In Ordner verschieben",
+                "Zielordner (oder neuen Namen eingeben):",
+                choices, 0, True,
+            )
+            if not ok or not current:
+                return
+            target = "" if current == "(Root)" else current.strip().strip(FOLDER_SEP)
+        folders = set(self.meta.get("folders") or [])
+        target = target or ""
+        prefix = target + FOLDER_SEP if target else ""
+        changed = []
+        for i in idxs:
+            ent = self.meta["files"][i]
+            name = ent.get("name", "")
+            if _folder_of(name) == target:
+                continue
+            basename = _item_name(name)
+            new_name = prefix + basename
+            if new_name == name:
+                continue
+            ent["name"] = new_name
+            changed.append(basename)
+        if not changed:
+            show_toast(self, "Verschieben", "Keine Dateien verschoben.")
+            return
+        if target:
+            folders.add(target)
+        self.meta["folders"] = sorted(folders, key=str.lower)
+        self._save_meta()
+        self.current_folder = target
+        self.refresh_list()
+        show_toast(self, "Verschoben", f"{len(changed)} Datei(en) nach „{target or '(Root)'}“.")
+
+    def _rename_folder(self, folder: str):
+        name, ok = QInputDialog.getText(
+            self, "Ordner umbenennen", "Neuer Name:", text=_item_name(folder)
+        )
+        if not ok or not name.strip():
+            return
+        new_name = name.strip().strip(FOLDER_SEP)
+        if not new_name:
+            return
+        parent = _folder_of(folder)
+        new_folder = f"{parent}{FOLDER_SEP}{new_name}" if parent else new_name
+        if new_folder == folder:
+            return
+        existing = self._all_folders() - {folder}
+        if new_folder in existing:
+            QMessageBox.information(
+                self, "Umbenennen",
+                f"Der Ordner „{new_folder}“ existiert bereits.",
+            )
+            return
+        old_prefix = folder + FOLDER_SEP
+        new_prefix = new_folder + FOLDER_SEP
+        new_folders = set()
+        for f in (self.meta.get("folders") or []):
+            if f == folder:
+                new_folders.add(new_folder)
+            elif f.startswith(old_prefix):
+                new_folders.add(new_prefix + f[len(old_prefix):])
+            else:
+                new_folders.add(f)
+        for ent in self.meta.get("files", []):
+            name = ent.get("name", "")
+            if name.startswith(old_prefix):
+                ent["name"] = new_prefix + name[len(old_prefix):]
+        self.meta["folders"] = sorted(new_folders, key=str.lower)
+        self._save_meta()
+        self.current_folder = new_folder
+        self.refresh_list()
+        show_toast(self, "Umbenannt", f"{folder} → {new_folder}")
+
+    def _delete_folder(self, folder: str):
+        prefix = folder + FOLDER_SEP
+        members = sum(1 for e in self.meta.get("files", [])
+                      if e.get("name", "").startswith(prefix))
+        reply = QMessageBox.question(
+            self,
+            "Ordner löschen",
+            f"Ordner „{folder}“ löschen?\n\n"
+            f"{members} Datei(en) werden eine Ebene nach oben verschoben.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        parent = _folder_of(folder)
+        for ent in self.meta.get("files", []):
+            name = ent.get("name", "")
+            if name.startswith(prefix):
+                tail = name[len(prefix):]
+                ent["name"] = f"{parent}{FOLDER_SEP}{tail}" if parent else tail
+        folders = {
+            f for f in (self.meta.get("folders") or [])
+            if f != folder and not f.startswith(prefix)
+        }
+        self.meta["folders"] = sorted(folders, key=str.lower)
+        self._save_meta()
+        self.current_folder = parent
+        self.refresh_list()
+        show_toast(self, "Ordner gelöscht", folder)
+
+    def _save_meta(self):
+        """Schreibt ausschließlich die (verschlüsselte) Meta neu (keine Blob-Änderung).
+
+        Die Meta wird erst vollständig im Speicher verschlüsselt, BEVOR die Datei
+        verändert wird. Schlägt die Verschlüsselung fehl, bleibt der Container
+        unangetastet (die alte Meta bleibt erhalten).
+        """
+        try:
+            new_blob = encrypt_meta(self.meta, self.master_key)
+        except Exception as e:
+            self.append_log(f"FEHLER beim Verschlüsseln der Metadaten: {e}")
+            QMessageBox.critical(
+                self, "Fehler",
+                f"Metadaten konnten nicht verschlüsselt werden:\n{e}",
+            )
+            return
+        try:
+            with open(self.container_path, "rb+") as f:
+                f.seek(-META_LEN_SIZE, os.SEEK_END)
+                meta_len = struct.unpack("<Q", f.read(META_LEN_SIZE))[0]
+                meta_pos = os.path.getsize(self.container_path) - META_LEN_SIZE - meta_len
+                f.truncate(meta_pos)
+                f.seek(0, os.SEEK_END)
+                f.write(new_blob)
+                f.write(struct.pack("<Q", len(new_blob)))
+        except Exception as e:
+            self.append_log(f"FEHLER beim Speichern der Metadaten: {e}")
+            QMessageBox.critical(
+                self, "Fehler",
+                f"Metadaten konnten nicht gespeichert werden:\n{e}",
+            )
+            return
+        try:
+            self.meta = touch_container_meta(
+                self.meta, flags=self.flags, app_version=f"{edition} {version}"
+            )
+        except Exception:
+            pass
 
 

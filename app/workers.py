@@ -102,6 +102,7 @@ class AddWorker(QObject):
         master_key: bytes,
         flags: int,
         stop_event: threading.Event,
+        folder: str = "",
     ):
         super().__init__()
         self.container_path = container_path
@@ -109,6 +110,7 @@ class AddWorker(QObject):
         self.master_key = master_key
         self.flags = flags
         self.stop_event = stop_event
+        self.folder = folder or ""
 
     def run(self):
         """Worker: Dateien in Container verschlüsseln und Meta aktualisieren."""
@@ -154,6 +156,16 @@ class AddWorker(QObject):
                     meta, flags=self.flags, app_version=f"{edition} {version}"
                 )
 
+                # Zielordner (inkl. Elternpfade) in der Meta festhalten
+                if self.folder:
+                    folders = set(meta.get("folders") or [])
+                    parts = self.folder.split("/")
+                    p = ""
+                    for part in parts:
+                        p = f"{p}/{part}" if p else part
+                        folders.add(p)
+                    meta["folders"] = sorted(folders, key=str.lower)
+
                 # Datei ab hier kürzen, neuer Content wird angehängt
                 f.truncate(meta_pos)
                 f.seek(0, os.SEEK_END)
@@ -170,6 +182,8 @@ class AddWorker(QObject):
 
                         offset = f.tell()
                         name = os.path.basename(filepath)
+                        if self.folder:
+                            name = f"{self.folder}/{name}"
                         size = os.path.getsize(filepath)
 
                         # Progress-Callback
@@ -181,7 +195,7 @@ class AddWorker(QObject):
 
                         # Datei verschlüsseln und anhängen
                         encrypt_file_to_blob(
-                            filepath, f, v2, progress_cb=cb, stop_event=self.stop_event
+                            filepath, f, v2, filename=name, progress_cb=cb, stop_event=self.stop_event
                         )
 
                         newpos = f.tell()

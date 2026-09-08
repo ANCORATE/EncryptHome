@@ -197,6 +197,7 @@ QCheckBox::indicator {
     background-color: {{surface-2}};
 }
 QCheckBox::indicator:checked {
+    image: {{check-image}};
     background-color: {{accent}};
     border-color: {{accent}};
 }
@@ -420,4 +421,46 @@ QLabel#WelcomeSubtitle {
     font-size: 16px;
     letter-spacing: 2px;
     color: {{welcome-sub}};
+}
+
+/* ------------------ Toast (Erfolgs-Meldungen) ------------------ */
+QFrame#Toast {
+    background-color: {{surface-2}};
+    border: 1px solid {{border-strong}};
+    border-radius: 8px;
+}
+QLabel#ToastTitle {
+    color: {{success}};
+    font-weight: bold;
+    font-size: 10pt;
+}
+QLabel#ToastMsg {
+    color: {{text}};
+    font-size: 9pt;
+}
+
+/* ------------------ Geführter Leerzustand ------------------ */
+QFrame#EmptyState {
+    background: transparent;
+}
+QLabel#EmptyStateTitle {
+    color: {{text-mid}};
+    font-weight: bold;
+    font-size: 13pt;
+}
+QLabel#EmptyStateHint {
+    color: {{text-dim}};
+    font-size: 10pt;
+}
+QPushButton#EmptyStateBtn {
+    background-color: {{surface-2}};
+    color: {{text}};
+    border: 1px solid {{border-strong}};
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-size: 10pt;
+}
+QPushButton#EmptyStateBtn:hover {
+    background-color: {{surface-hover}};
+    border: 1px solid {{accent-focus}};
 }

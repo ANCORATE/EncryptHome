@@ -285,6 +285,25 @@ def _apply_accent(palette: dict, accent: str) -> dict:
 
 _FONT_RE = re.compile(r"(font-size:\s*)([\d.]+)(pt\b)")
 
+# Haken-Bild fuer aktivierte Checkboxen. Qt kann keine Data-URIs in
+# Stylesheets laden, daher werden kleine PNGs neben den CSS-Dateien gelegt
+# und ueber {{check-image}} referenziert. Die Haekenfarbe richtet sich nach
+# der Kontrastfarbe auf Akzentgrund (on-accent) des jeweiligen Themes.
+_CHECK_IMAGES = {
+    "black": "check-black.png",
+    "white": "check-white.png",
+}
+
+
+def check_image_value(on_accent: str) -> str:
+    """Liefert den url()-Wert fuer das Haken-Bild passend zur on-accent-Farbe."""
+    try:
+        r, g, b = _hex_to_rgb(on_accent)
+    except Exception:
+        r, g, b = 255, 255, 255
+    name = _CHECK_IMAGES["black" if (r + g + b) / 3 < 128 else "white"]
+    return 'url("%s")' % os.path.join(THEME_DIR, name).replace("\\", "/")
+
 
 def scale_fonts(css: str, factor: float) -> str:
     """Skaliert alle pt-Schriftgroessen im Stylesheet um den Dichte-Faktor."""
@@ -312,5 +331,6 @@ def build_stylesheet(theme_name: str = "Standard-dark", accent: str = "",
         css = f.read()
     for key, value in palette.items():
         css = css.replace("{{" + key + "}}", value)
+    css = css.replace("{{check-image}}", check_image_value(palette.get("on-accent", "#ffffff")))
     factor = DENSITY.get(density, DENSITY[DEFAULT_DENSITY])
     return scale_fonts(css, factor)

@@ -31,7 +31,7 @@ from app.main_window import App
 from app.dialogs import (
     SetupDialog, LoginDialog, VaultEntry, FileDropList,
     UpdateNewsDialog, DetailsDialog, AboutDialog,
-    TermsOfServiceDialog, WelcomeOverlay,
+    TermsOfServiceDialog, WelcomeOverlay, OnboardingDialog,
 )
 
 # In app.workers definierte Symbole fuer Re-Export bereitstellen
@@ -96,6 +96,9 @@ def main():
     # New device: show welcome dialog
     welcome = WelcomeOverlay()
     welcome.exec()
+
+    # Erst-Start-Onboarding: Sicherheitsmodell & Gerätebindung erklären
+    OnboardingDialog().exec()
 
     # Show TOS only for new devices
     tos = TermsOfServiceDialog()

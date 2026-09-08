@@ -62,6 +62,7 @@ desktop.ini
 *.log
 *.tmp
 *.bak
+update_temp/
 *.swp
 *~
 
