@@ -11,9 +11,9 @@ import struct
 import time
 import hashlib
 import subprocess
-import socket
 import platform
 import secrets
+import tempfile
 import requests
 from collections import OrderedDict
 from pathlib import Path
@@ -76,6 +76,9 @@ except OSError:
 CONFIG_FILE = os.path.join(CONFIG_DIR, "device.png")
 REGISTRATION_MARKER = os.path.join(CONFIG_DIR, ".registered")
 RECENT_CONTAINERS_FILE = os.path.join(CONFIG_DIR, "recent_containers.json")
+
+# Magic-Präfix für verschlüsselte Zuletzt-Liste (device-key-gebunden)
+_RECENT_MAGIC = b"ANC_REC\x01"
 
 ANCORATE_BLUE = "#1e88e5"
 ANCORATE_BLUE_SOFT = "#90caf9"
@@ -242,6 +245,37 @@ def _secure_zero_bytes(data):
         except Exception:
             pass
     return None
+
+
+def _secure_delete_file(path: str, passes: int = 3):
+    """Überschreibt eine Datei mehrfach mit Zufallsdaten und löscht sie dann.
+
+    Verhindert, dass entschlüsselte Klartextdaten aus Temp-Dateien nach dem
+    Löschen auf der Platte wiederhergestellt werden können. Scheitert das
+    Überschreiben, wird zumindest die Löschung versucht.
+    """
+    if not path or not os.path.exists(path):
+        return
+    try:
+        size = os.path.getsize(path)
+        if size > 0:
+            with open(path, "r+b") as fh:
+                chunk = 1024 * 1024
+                for _ in range(passes):
+                    fh.seek(0)
+                    remaining = size
+                    while remaining > 0:
+                        n = min(chunk, remaining)
+                        fh.write(secrets.token_bytes(n))
+                        remaining -= n
+                    fh.flush()
+                    os.fsync(fh.fileno())
+    except Exception:
+        pass
+    try:
+        os.remove(path)
+    except Exception:
+        pass
 
 
 _DEVICE_KEY_SEED = b"ANCORATE_DEVICE_KEY_SEED_2026_STABLE"
@@ -456,23 +490,69 @@ def mark_device_registered():
         pass
 
 
+def _recent_containers_key():
+    """Stabiler, gerätegebundener Schlüssel für die Zuletzt-Liste (domain-separiert)."""
+    try:
+        dev = generate_device_key()
+        if not dev:
+            return None
+        from base import derive_subkey
+        return derive_subkey(dev, b"ANCORATE_RECENT_V1", "ancorate-recent-v1")
+    except Exception:
+        return None
+
+
 def load_recent_containers() -> list:
-    """Load recent containers list"""
+    """Load recent containers list (encrypted on disk, plaintext legacy fallback)."""
     try:
         if os.path.exists(RECENT_CONTAINERS_FILE):
-            with open(RECENT_CONTAINERS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with open(RECENT_CONTAINERS_FILE, "rb") as f:
+                raw = f.read()
+            if raw.startswith(_RECENT_MAGIC):
+                blob = raw[len(_RECENT_MAGIC):]
+                key = _recent_containers_key()
+                if key:
+                    try:
+                        from decrypt import decrypt_meta
+                        return decrypt_meta(blob, key)
+                    except Exception:
+                        return []
+                return []
+            # Legacy: unverschlüsseltes JSON aus früheren Versionen
+            return json.loads(raw.decode("utf-8"))
         return []
     except Exception:
         return []
 
 
 def save_recent_containers(containers: list):
-    """Save recent containers list"""
+    """Save recent containers list (encrypted with the device-derived key)."""
     try:
         ensure_config_dir()
-        with open(RECENT_CONTAINERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(containers[:10], f, indent=2)  # Keep only last 10
+        key = _recent_containers_key()
+        if not key:
+            with open(RECENT_CONTAINERS_FILE, "w", encoding="utf-8") as f:
+                json.dump(containers[:10], f, indent=2)
+            return
+        from encrypt import encrypt_meta
+        blob = encrypt_meta(containers[:10], key)
+        tmp_fd, tmp = tempfile.mkstemp(
+            dir=os.path.dirname(RECENT_CONTAINERS_FILE),
+            prefix=".recent-", suffix=".tmp",
+        )
+        try:
+            with os.fdopen(tmp_fd, "wb") as f:
+                f.write(_RECENT_MAGIC)
+                f.write(blob)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, RECENT_CONTAINERS_FILE)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
     except Exception as e:
         print(f"[ERROR] Failed to save recent containers: {e}")
 
@@ -597,17 +677,12 @@ def rekey_container_password(
                 "Der Tresor bleibt unverändert."
             ) from e
         finally:
-            # Temporäre Dateien in jedem Fall aufräumen
+            # Temporäre Dateien sicher (überschreibend) aufräumen, damit
+            # keine entschlüsselten Klartextdaten auf der Platte zurückbleiben.
             if tmp_decrypt_path:
-                try:
-                    os.remove(tmp_decrypt_path)
-                except Exception:
-                    pass
+                _secure_delete_file(tmp_decrypt_path)
             if tmp_encrypt_path:
-                try:
-                    os.remove(tmp_encrypt_path)
-                except Exception:
-                    pass
+                _secure_delete_file(tmp_encrypt_path)
     
     # Create clean metadata without blob fields for JSON serialization
     new_meta_files = []
@@ -775,19 +850,6 @@ def validate_password_strength(password: str) -> tuple[bool, str]:
         return False, "Passwort muss mindestens 1 Sonderzeichen enthalten (!@#$%^&* etc.)."
     
     return True, ""
-
-def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    ip = ""
-    try:
-        # "Verbindung" zu einer externen Adresse aufbauen (wird nicht wirklich gesendet)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-    except Exception:
-        print("Device offline. It has to be online to identify its IP address.")
-    finally:
-        s.close()
-    return ip
 
 
 def write_header(fh, flags: int, salt: bytes):

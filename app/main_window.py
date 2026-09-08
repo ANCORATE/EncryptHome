@@ -39,6 +39,7 @@ from utilities.screenshot_protection import (
 from utilities.settings import *
 
 from app.core import *
+from app.core import _secure_zero_bytes
 from app.passwords import *
 from app.workers import *
 from app.dialogs import *
@@ -151,9 +152,20 @@ class App(QWidget):
 
         self.setLayout(self.layout)
         self.setStyleSheet(APP_STYLE)
+
+        # Hauptfenster für animierte Theme-Wechsel (Fade-Überblendung) anmelden
+        register_main_window(self)
         
-        # Auto-Lock Timeout (5 Minuten)
-        self.timeout_ms = 300000
+        # ---- Auto-Lock (Inaktivität) ----
+        self._auto_lock_timer = QTimer(self)
+        self._auto_lock_timer.setSingleShot(True)
+        self._auto_lock_timer.timeout.connect(self._auto_lock_triggered)
+        self._auto_lock_rearm()
+        # Inaktivität (Mouse/Key) app-weit erkennen – auch bei Eingaben in
+        # Kind-Widgets (Dateiliste, Suche, Menüleiste), nicht nur im Hauptfenster.
+        self._auto_lock_app = QApplication.instance()
+        if self._auto_lock_app is not None:
+            self._auto_lock_app.installEventFilter(self)
 
         self.apply_settings()  # Initial anwenden
         
@@ -443,6 +455,67 @@ class App(QWidget):
 
     # ------------------------------------------------------
 
+    def _auto_lock_rearm(self):
+        """Auto-Lock-Timer gemäß Einstellung neu aufziehen (0 = deaktiviert).
+
+        Wird bei jeder Nutzeraktivität (Mouse/Key) sowie bei Öffnen eines
+        Tresors neu gestartet.
+        """
+        minutes = int(self.data.get("auto_lock_minutes", 5) or 0)
+        if minutes <= 0:
+            self._auto_lock_minutes = 0
+            self._auto_lock_timer.stop()
+            return
+        self._auto_lock_minutes = minutes
+        self._auto_lock_timer.start(minutes * 60 * 1000)
+
+    def _auto_lock_touch(self):
+        """Setzt die Inaktivitäts-Uhr bei erkannter Nutzeraktivität zurück."""
+        if self._auto_lock_minutes > 0:
+            self._auto_lock_timer.start(self._auto_lock_minutes * 60 * 1000)
+
+    def _auto_lock_triggered(self):
+        """Sperrt den Tresor nach Inaktivität (nur wenn ein Tresor geöffnet ist)."""
+        if not self.master_key or not self.container_path:
+            return
+        # Nicht sperren, solange eine Container-Operation läuft (Export, Add,
+        # Preview, Bearbeitung, Rewrite, Passwort-Änderung), um einen laufenden
+        # Schreibvorgang nicht abzubrechen oder einen nativen Zustand zu stören.
+        if (
+            self.exporting
+            or self.changing_password
+            or self.password_change_in_progress
+            or getattr(self, "_edit_session", None) is not None
+        ):
+            self._auto_lock_rearm()
+            return
+        p = getattr(self, "progress", None)
+        if p is not None:
+            try:
+                if p.isVisible():
+                    self._auto_lock_rearm()
+                    return
+            except Exception:
+                pass
+        self.append_log("Auto-Lock: Tresor wegen Inaktivität gesperrt.")
+        self.close_container()
+        notifier.show("Tresor gesperrt 🔒", "Der Tresor wurde automatisch gesperrt.")
+
+    def eventFilter(self, obj: object, event: object) -> bool:
+        """Nutzeraktivität (Input) erkennt und Auto-Lock-Uhr zurücksetzen."""
+        try:
+            etype = event.type()
+            if etype in (
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseMove,
+                QEvent.Type.KeyPress,
+                QEvent.Type.Wheel,
+            ):
+                self._auto_lock_touch()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
     def apply_settings(self):
         try:
             s = load_settings()
@@ -464,12 +537,16 @@ class App(QWidget):
             print("[SETTINGS] Fehler beim Anwenden der Einstellungen:", e)
     
     def apply_theme(self, theme_name):
-        """Theme sofort ohne Neustart anwenden (Akzentfarbe + Dichte inklusive)"""
+        """Theme anwenden – bei Theme-Wechsel mit sanfter Fade-Überblendung."""
         try:
             s = load_settings()
             accent = str(s.get("ui_accent", "") or "")
             density = str(s.get("ui_density", "Mittel") or "Mittel")
-            self.setStyleSheet(build_stylesheet(theme_name, accent, density))
+
+            def _swap():
+                self.setStyleSheet(build_stylesheet(theme_name, accent, density))
+
+            fade_theme_swap(_swap, theme_name)
             print(f"[SETTINGS] Theme '{theme_name}' angewendet "
                   f"(Akzent='{accent}', Dichte='{density}')")
         except Exception as e:
@@ -537,6 +614,7 @@ class App(QWidget):
         try:
             self.data = settings
             self._apply_screenshot_protection(settings)
+            self._auto_lock_rearm()
             print("[SETTINGS] Verhaltens-Einstellungen aktualisiert")
         except Exception as e:
             print(f"[SETTINGS] Verhaltens-Fehler: {e}")
@@ -736,6 +814,7 @@ class App(QWidget):
             self.meta = meta
             self.flags = flags
             self._record_container_opened()
+            self._auto_lock_rearm()
 
             # ------------------------------------------------------------------
             # 7. GUI aktualisieren
@@ -885,6 +964,7 @@ Mögliche Ursache
             self.meta = meta
             self.flags = flags
             self._record_container_opened()
+            self._auto_lock_rearm()
 
             # ------------------------------------------------------------------
             # 7. GUI aktualisieren
@@ -990,6 +1070,7 @@ Mögliche Ursache
         self.meta = meta
         self.flags = flags
         self.pwd = pwd
+        self._auto_lock_rearm()
 
         self.status.setText("Container erstellt.")
         self.append_log("Container created.")
@@ -1038,16 +1119,31 @@ Mögliche Ursache
         try:
             self.append_log(f"Vernichtung gestartet (Modus: {method})...")
 
+            # Fortschrittsdialog für das (ggf. lange) sichere Überschreiben
+            self.progress = QProgressDialog(
+                f"Vernichte Tresor mit '{method}'...", None, 0, 100, self
+            )
+            self.progress.setWindowTitle(f"ANCORATE {edition}")
+            self.progress.setValue(0)
+            self.progress.show()
+
             # 3. Physisches Überschreiben (Die gesamte Datei, aber den
             #    Header überspringen, damit der Tresor lesbar bleibt, falls
             #    der Vorgang unterbrochen wird)
-            file_size = os.path.getsize(c_path)
-            with open(c_path, "rb+") as fh:
-                # Header überspringen, um Container im Notfall noch lesen zu können
-                data_offset = HEADER_LEN
-                data_length = file_size - data_offset
-                if data_length > 0:
-                    self._secure_overwrite(fh, data_offset, data_length)
+            try:
+                file_size = os.path.getsize(c_path)
+                with open(c_path, "rb+") as fh:
+                    # Header überspringen, um Container im Notfall noch lesen zu können
+                    data_offset = HEADER_LEN
+                    data_length = file_size - data_offset
+                    if data_length > 0:
+                        self._secure_overwrite(fh, data_offset, data_length)
+            finally:
+                try:
+                    self.progress.close()
+                except Exception:
+                    pass
+                self.progress = None
 
             # 4. Datei vom Dateisystem entfernen
             os.remove(c_path)
@@ -1096,6 +1192,7 @@ Mögliche Ursache
 
     # ------------------ Container Operationen ------------------
     def close_container(self):
+        self._auto_lock_timer.stop()
         self._end_edit_session()
         if hasattr(self, "stop_event") and self.stop_event:
             try:

@@ -13,6 +13,7 @@ import hashlib
 import subprocess
 import socket
 import platform
+import secrets
 import requests
 from collections import OrderedDict
 from pathlib import Path
@@ -42,6 +43,52 @@ from app.core import *
 # ============================================================
 # Worker-Threads + Export-Helfer (aus main.py)
 # ============================================================
+
+def _deletion_passes(method: str) -> int:
+    """Anzahl der Überschreib-Durchgänge gemäß ausgewählter Löschmethode."""
+    if "Shatterer Ultra" in method:
+        return 300
+    if "Furnace Max" in method:
+        return 200
+    if "Vaporizer 1" in method:
+        return 100
+    if "Gutmann (35x)" in method:
+        return 35
+    if "DoD 5220.22-M (3x)" in method:
+        return 3
+    return 1
+
+
+def _secure_delete_plaintext(path: str, method: str):
+    """Überschreibt eine Klartext-Quelldatei gemäß Methode und löscht sie.
+
+    Verhindert, dass der Klartext der Originaldatei nach der Verschlüsselung
+    (Option 'del_source_added') auf der Platte wiederhergestellt werden kann.
+    Scheitert das Überschreiben, wird zumindest die Löschung versucht.
+    """
+    passes = _deletion_passes(method)
+    try:
+        size = os.path.getsize(path)
+        if size > 0:
+            with open(path, "r+b") as fh:
+                chunk = 1024 * 1024
+                for _ in range(passes):
+                    fh.seek(0)
+                    remaining = size
+                    while remaining > 0:
+                        n = min(chunk, remaining)
+                        fh.write(secrets.token_bytes(n))
+                        remaining -= n
+                    fh.flush()
+                    os.fsync(fh.fileno())
+    except Exception:
+        pass
+    try:
+        os.remove(path)
+    except Exception:
+        pass
+
+
 
 class AddWorker(QObject):
     progress = pyqtSignal(int)
@@ -182,12 +229,11 @@ class AddWorker(QObject):
  # Einstellungen neu laden für aktuellen del_source_added Status
             current_settings = load_settings()
             if current_settings.get("del_source_added"):
-                # Nur die tatsächlich erfolgreich verschlüsselten Quelldateien löschen.
+                # Nur die tatsächlich erfolgreich verschlüsselten Quelldateien
+                # mit der konfigurierten Löschmethode sicher vernichten.
+                method = current_settings.get("deletion_method", "Standard")
                 for file in added_paths:
-                    try:
-                        os.remove(file)
-                    except Exception:
-                        pass
+                    _secure_delete_plaintext(file, method)
 
             self.finished.emit(added)
 

@@ -6,6 +6,7 @@ import platform
 import hashlib
 import tempfile
 import time
+import weakref
 
 import requests
 from PyQt6.QtCore import *
@@ -73,6 +74,8 @@ DEFAULT_SETTINGS = {
     # --- NEU: System & Verhalten ---
     "confirm_exit": True,
     "del_source_added": False,
+    # --- Auto-Lock (in Minuten; 0 = deaktiviert) ---
+    "auto_lock_minutes": 5,
     # --- NEU: Sicherheit & Pfade ---
     "deletion_method": "Standard",  # Standard, DoD, Gutmann
     "screenshot_protection": True,
@@ -389,6 +392,136 @@ def _notify_settings_changed():
             pass
 
 
+# ------------------ Sanfter Theme-Wechsel (Fade-Überblendung) ------------------
+# Qt-Stylesheets lassen sich nicht nativ animieren. Beim Wechsel des Themes
+# (z. B. dunkel nach hell) wird die Opazität der Top-Level-Fenster kurz
+# abgesenkt, das neue Stylesheet angewendet und wieder eingeblendet – ein
+# weicher Übergang statt eines harten Umschaltens. Akzent-/Dichte-Änderungen
+# im selben Theme und der allererste Aufruf (Programmstart) werden ohne Fade
+# übernommen.
+
+_FADE_OUT_MS = 150
+_FADE_IN_MS = 220
+_FADE_MIN_OPACITY = 0.1
+
+_last_applied_theme = None
+_main_window_ref = None
+_theme_fade_anims = []
+_theme_fade_generation = 0
+
+# Plattformen, auf denen Qt native Fenster-Opazität (setWindowOpacity) wirklich
+# unterstützt. Wayland/offscreen/minimal etc. können das nicht und würden sonst
+# pro Fade-Schritt "This plugin does not support setting window opacity"
+# ausgeben – dort wird der Fade übersprungen (sofortiger, sauberer Wechsel).
+_OPACITY_SUPPORTED_PLATFORMS = {"windows", "cocoa", "xcb"}
+
+
+def _window_opacity_supported() -> bool:
+    """True, wenn die aktuelle Qt-Plattform windowOpacity unterstützt."""
+    try:
+        name = (QGuiApplication.platformName() or "").lower()
+        return name in _OPACITY_SUPPORTED_PLATFORMS
+    except Exception:
+        return False
+
+
+def register_main_window(window):
+    """Meldet das Hauptfenster an, damit Theme-Wechsel per Fade animiert werden."""
+    global _main_window_ref
+    _main_window_ref = weakref.ref(window) if window is not None else None
+
+
+def _stop_theme_fade():
+    """Bricht eine laufende Überblendung ab und stellt volle Opazität her."""
+    global _theme_fade_anims
+    anims, _theme_fade_anims = _theme_fade_anims, []
+    for anim in anims:
+        try:
+            anim.stop()
+            target = anim.targetObject()
+            if target is not None:
+                target.setWindowOpacity(1.0)
+        except Exception:
+            pass
+
+
+def fade_theme_swap(swap_fn, theme_name, extra_windows=()):
+    """Wendet swap_fn mit sanfter Überblendung an, wenn sich das Theme ändert.
+
+    :param swap_fn: Callable, das das neue Stylesheet setzt.
+    :param theme_name: Name des neuen Themes (nur ein tatsächlicher Theme-Wechsel fadet).
+    :param extra_windows: Weitere sichtbare Top-Level-Fenster, die mit überblendet
+                          werden (z. B. der offene Einstellungs-Dialog).
+    """
+    global _last_applied_theme, _theme_fade_generation
+    if theme_name == _last_applied_theme:
+        return swap_fn()
+
+    windows = []
+    main_win = _main_window_ref() if _main_window_ref is not None else None
+    if main_win is not None and main_win.isVisible():
+        windows.append(main_win)
+    for w in extra_windows:
+        if w is not None and w.isVisible() and w not in windows:
+            windows.append(w)
+
+    is_first = _last_applied_theme is None
+    _last_applied_theme = theme_name
+    if not windows or is_first or not _window_opacity_supported():
+        return swap_fn()
+
+    _stop_theme_fade()
+    _theme_fade_generation += 1
+    gen = _theme_fade_generation
+    remaining = [len(windows)]
+
+    def _on_fade_out_done():
+        if gen != _theme_fade_generation:
+            return
+        remaining[0] -= 1
+        if remaining[0] <= 0:
+            _theme_swap_mid(windows, swap_fn, gen)
+
+    for w in windows:
+        anim = QPropertyAnimation(w, b"windowOpacity")
+        anim.setDuration(_FADE_OUT_MS)
+        anim.setStartValue(1.0)
+        anim.setEndValue(_FADE_MIN_OPACITY)
+        anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        anim.finished.connect(_on_fade_out_done)
+        _theme_fade_anims.append(anim)
+        anim.start()
+
+
+def _theme_swap_mid(windows, swap_fn, gen):
+    """Tauscht das Stylesheet am tiefsten Opazitätspunkt und blendet ein."""
+    global _theme_fade_anims
+    try:
+        swap_fn()
+    finally:
+        remaining = [len(windows)]
+
+        def _on_fade_in_done():
+            global _theme_fade_anims
+            if gen != _theme_fade_generation:
+                return
+            remaining[0] -= 1
+            if remaining[0] <= 0:
+                _theme_fade_anims = []
+
+        fade_in = []
+        for w in windows:
+            anim = QPropertyAnimation(w, b"windowOpacity")
+            anim.setDuration(_FADE_IN_MS)
+            anim.setStartValue(w.windowOpacity())
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+            anim.finished.connect(_on_fade_in_done)
+            fade_in.append(anim)
+            anim.start()
+        _theme_fade_anims = fade_in
+
+
 # ------------------ Worker Thread für Changelog ------------------
 class ChangelogWorker(QThread):
     """Lädt den Changelog im Hintergrund, damit die GUI nicht einfriert."""
@@ -535,6 +668,25 @@ class SettingsDialog(QDialog):
         self.cb_del_source_added.stateChanged.connect(self._save_immediate)
         gb_layout.addWidget(self.cb_del_source_added)
 
+        # Auto-Lock
+        lock_row = QHBoxLayout()
+        lock_row.setSpacing(8)
+        lock_lbl = QLabel("Automatisch sperren nach:")
+        self.spin_auto_lock = QSpinBox()
+        self.spin_auto_lock.setRange(0, 480)
+        self.spin_auto_lock.setSuffix(" Min.")
+        self.spin_auto_lock.setSpecialValueText("Aus")
+        self.spin_auto_lock.setValue(int(self.data.get("auto_lock_minutes", 5)))
+        self.spin_auto_lock.setToolTip(
+            "Der Tresor wird nach dieser Zeit der Inaktivität automatisch gesperrt "
+            "(Passwort wird erneut benötigt). 0 = Aus."
+        )
+        self.spin_auto_lock.valueChanged.connect(self._save_auto_lock)
+        lock_row.addWidget(lock_lbl)
+        lock_row.addWidget(self.spin_auto_lock)
+        lock_row.addStretch()
+        gb_layout.addLayout(lock_row)
+
         group_behavior.setLayout(gb_layout)
         layout.addWidget(group_behavior)
 
@@ -634,7 +786,17 @@ class SettingsDialog(QDialog):
         self.salt_window.show()
 
     def kill_app(self):
-        sys.exit(0)
+        reply = QMessageBox.question(
+            self,
+            "Anwendung sofort beenden",
+            "Soll die Anwendung wirklich sofort beendet werden?\n\n"
+            "Nicht gespeicherte In-Tresor-Bearbeitungen werden nicht automatisch in den Tresor "
+            "zurückgeschrieben. Möchten Sie fortsetzen?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            sys.exit(0)
 
     # Hilfsmethode für den Browse-Button
     def browse_folder(self):
@@ -1194,6 +1356,11 @@ class SettingsDialog(QDialog):
         self.data["deletion_method"] = text
         save_settings(self.data)
     
+    def _save_auto_lock(self, minutes):
+        """Speichert Auto-Lock-Timeout sofort (Minuten, 0 = aus)."""
+        self.data["auto_lock_minutes"] = int(minutes)
+        save_settings(self.data)
+    
     def _save_theme(self, theme):
         """Speichert Theme sofort"""
         self.data["theme"] = theme
@@ -1254,16 +1421,24 @@ class SettingsDialog(QDialog):
     def _apply_theme_now(self):
         """Wendet Theme + Akzentfarbe + Dichte sofort app-weit an.
 
+        Bei einem tatsächlichen Theme-Wechsel wird das Stylesheet über eine
+        kurze Fade-Überblendung getauscht (Hauptfenster + dieser Dialog).
+
         Lazy import, um zirkuläre Imports zu vermeiden.
         """
         try:
             from .theme_engine import build_stylesheet
             app = QApplication.instance()
-            if app is not None:
-                app.setStyleSheet(build_stylesheet(
-                    self.data.get("theme", "Standard-dark"),
-                    str(self.data.get("ui_accent", "") or ""),
-                    str(self.data.get("ui_density", "Mittel") or "Mittel")))
+            if app is None:
+                return
+            theme_name = self.data.get("theme", "Standard-dark")
+            accent = str(self.data.get("ui_accent", "") or "")
+            density = str(self.data.get("ui_density", "Mittel") or "Mittel")
+
+            def _swap():
+                app.setStyleSheet(build_stylesheet(theme_name, accent, density))
+
+            fade_theme_swap(_swap, theme_name, extra_windows=(self,))
         except Exception as e:
             print(f"[SETTINGS] Live-Theme-Fehler: {e}")
 
