@@ -298,10 +298,7 @@ def _decode_text(data: bytes) -> tuple[str, str]:
     try:
         return data.decode("utf-8"), "utf-8"
     except Exception:
-        try:
-            return data.decode("utf-8", errors="replace"), "utf-8 (replace)"
-        except Exception:
-            return data.decode("latin-1", errors="replace"), "latin-1 (replace)"
+        return data.decode("utf-8", errors="replace"), "utf-8 (replace)"
 
 
 class PreviewDialog(QDialog):

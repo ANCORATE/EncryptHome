@@ -13,6 +13,7 @@ import hashlib
 import subprocess
 import socket
 import platform
+import secrets
 import requests
 from collections import OrderedDict
 from pathlib import Path
@@ -32,6 +33,7 @@ from utilities.checksum_check import *
 from utilities.header_utils import *
 from utilities.settings import *
 from utilities.theme_engine import build_stylesheet
+from utilities import get_app_icon
 
 # ============================================================
 # Globale Konstanten + Standalone-Helfer (aus main.py)
@@ -58,7 +60,6 @@ HEADER_LEN = struct.calcsize(HEADER_FMT)  # 4 + 1 + 1 + 16 + 6 = 28 Bytes
 HKDF_INFO = b"ANCORATE-MASTER-26"  # Info für HKDF
 HKDF_LENGTH = 32  # 32 Bytes -> AES-256
 LICENSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "licenses.dat")
-MASTER_KEY_LICENSE = b"ueeEu2Qv00JqDFb9K0vbEAL1MQsMRjDEItOMkzYUJwE="  # 32 Bytes fester Schlüssel für Lizenzdatei-Verschlüsselung
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".ancorate")
 
 
@@ -89,41 +90,6 @@ type_edition = "Capsule"
 # verify_file_integrity(f"ANCORATE_{edition}_26.2_Build_0009.exe", update=True)
 
 
-def get_app_icon():
-    """
-    Lädt das passende Icon-Format für die aktuelle Plattform.
-    Relative Pfade werden gegen das App-Verzeichnis aufgelöst, damit das
-    Icon auch dann gefunden wird, wenn das Arbeitsverzeichnis abweicht.
-    """
-    system = platform.system()
-
-    base = os.path.dirname(os.path.abspath(sys.argv[0]))
-    
-    # Verschiedene Icon-Formate versuchen
-    icon_paths = []
-    
-    if system == "Windows":
-        icon_paths = [
-            os.path.join(base, "utilities", "icon.ico"),
-            os.path.join(base, "utilities", "icon.png"),
-        ]
-    else:
-        icon_paths = [
-            os.path.join(base, "utilities", "icon.png"),
-            os.path.join(base, "utilities", "icon_64x64.png"),
-            os.path.join(base, "utilities", "icon_48x48.png"),
-            os.path.join(base, "utilities", "icon_32x32.png"),
-        ]
-    
-    # Erstes existierendes Icon zurückgeben
-    for path in icon_paths:
-        if os.path.exists(path):
-            return QIcon(path)
-    
-    # Fallback: Leeres Icon
-    return QIcon()
-
-
 def read_json_file(path):
     """Hilfsfunktion: Liest JSON ein"""
     try:
@@ -135,9 +101,14 @@ def read_json_file(path):
 
 def safe_run(cmd, timeout=1):
     try:
-        out = subprocess.check_output(
-            cmd, stderr=subprocess.DEVNULL, shell=True, text=True, timeout=timeout
-        )
+        if isinstance(cmd, str):
+            out = subprocess.check_output(
+                cmd, stderr=subprocess.DEVNULL, shell=True, text=True, timeout=timeout
+            )
+        else:
+            out = subprocess.check_output(
+                cmd, stderr=subprocess.DEVNULL, text=True, timeout=timeout
+            )
         return out.strip()
     except Exception:
         return ""
@@ -255,12 +226,22 @@ def ensure_config_dir():
     os.makedirs(d, exist_ok=True)
 
 
-def save_device_key_hex(key_bytes: bytes):
+def _secure_zero_bytes(data):
+    """Attempt to zero out sensitive bytes in memory.
+
+    Python doesn't guarantee immediate deallocation, but overwriting
+    the bytearray contents reduces the window during which the key
+    remains in process memory.
     """
-    Legacy function for compatibility. No longer saves to file since key is generated at runtime.
-    """
-    # Device key is now generated at runtime, no need to save
-    pass
+    if isinstance(data, (bytes, bytearray)):
+        try:
+            ba = bytearray(data)
+            for i in range(len(ba)):
+                ba[i] = 0
+            return ba
+        except Exception:
+            pass
+    return None
 
 
 _DEVICE_KEY_SEED = b"ANCORATE_DEVICE_KEY_SEED_2026_STABLE"
@@ -528,6 +509,10 @@ def rekey_container_password(
     if not os.path.isfile(container_path):
         raise FileNotFoundError(f"Container nicht gefunden: {container_path}")
 
+    from decrypt import decrypt_blob_range
+    from encrypt import encrypt_file_to_blob
+    import tempfile as tf
+
     new_salt = secrets.token_bytes(SALT_LEN)
     device_key = load_device_key() if (current_flags & FLAG_DEVICE) else None
     new_master = derive_master_key(
@@ -568,10 +553,6 @@ def rekey_container_password(
         tmp_decrypt_path = None
         tmp_encrypt_path = None
         try:
-            from decrypt import decrypt_blob_range
-            from encrypt import encrypt_file_to_blob
-            import tempfile as tf
-
             # Create temporary file for decrypted data
             with tf.NamedTemporaryFile(delete=False) as tmp_decrypt:
                 tmp_decrypt_path = tmp_decrypt.name
@@ -861,20 +842,33 @@ def read_header(fh):
 
 
 class notifier:
+    _tray_icon = None
+
+    @staticmethod
+    def _get_tray():
+        if notifier._tray_icon is None:
+            try:
+                tray = QSystemTrayIcon(get_app_icon())
+                tray.setVisible(False)
+                notifier._tray_icon = tray
+            except Exception:
+                return None
+        return notifier._tray_icon
+
     @staticmethod
     def show(title: str, message: str, timeout: int = 1):
         """
         Zeigt eine System-Push-Benachrichtigung an.
-
-        :param title: Titel der Nachricht
-        :param message: Inhalt der Nachricht
-        :param timeout: Dauer in Sekunden (optional)
+        Falls kein System-Tray verfügbar ist, wird die Meldung ausgegeben.
         """
-        # notification.notify(
-        #     title=title,
-        #     message=message,
-        #     timeout=timeout
-        # )
+        try:
+            tray = notifier._get_tray()
+            if tray is not None:
+                tray.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, timeout * 1000)
+            else:
+                print(f"[NOTIFY] {title}: {message}")
+        except Exception:
+            print(f"[NOTIFY] {title}: {message}")
 
 
 # Einfachen trennenden Strich erzeugen - wird in DetailsDialog verwendet

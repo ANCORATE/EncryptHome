@@ -58,7 +58,7 @@ def _make_requirement_label(text: str):
     label.setProperty("ok", False)
     return label
 
-def change_container_password(container_path: str, current_master_key: bytes, current_meta: dict, current_password: str, current_flags: int, parent=None) -> bool:
+def change_container_password(container_path: str, current_master_key: bytes, current_meta: dict, current_password: str, current_flags: int, parent=None) -> tuple[bool, str | None]:
     """
     Change password for existing container
     Returns True if successful, False if cancelled

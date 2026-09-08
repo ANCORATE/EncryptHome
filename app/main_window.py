@@ -13,6 +13,7 @@ import hashlib
 import subprocess
 import socket
 import platform
+import secrets
 import requests
 import tempfile
 from collections import OrderedDict
@@ -154,12 +155,6 @@ class App(QWidget):
         # Auto-Lock Timeout (5 Minuten)
         self.timeout_ms = 300000
 
-        # ---- Automatisch ständig aktualisieren ----
-        self.timer = QTimer(self)
-        self.timer.setInterval(10000)  # Alle 10 Sekunden (Performance)
-        self.timer.timeout.connect(self._simple_cleanup)
-        self.timer.start()
-        
         self.apply_settings()  # Initial anwenden
         
         # ---- Menüleiste hinzufügen ----
@@ -176,14 +171,6 @@ class App(QWidget):
         print("[SETTINGS] File Watcher aktiviert für sofortige Updates")
     
     
-    def _simple_cleanup(self):
-        """Einfache Cleanup Funktion"""
-        try:
-            import gc
-            gc.collect()
-            print("[CLEANUP] Simple Cleanup durchgeführt")
-        except Exception as e:
-            print(f"[CLEANUP] Fehler: {e}")
 
     def open_settings(self):
         dialog = SettingsDialog()
@@ -689,9 +676,6 @@ class App(QWidget):
         self.container_path = container_path
         pwd = password
 
-        # Add to recent containers on successful open
-        add_recent_container(self.container_path)
-
         try:
             # ------------------------------------------------------------------
             # 4. Datei öffnen
@@ -766,10 +750,46 @@ class App(QWidget):
             )
             self.file_list.setEnabled(True)
             self.refresh_list()
+            # Add to recent containers only after successful open
+            add_recent_container(self.container_path)
 
         except Exception as e:
             error_msg = str(e)
-            raise e
+
+            if "signature did not match digest" in error_msg.lower():
+                self.update_container_path()
+                user_msg = (
+                    """Der Tresor konnte nicht geöffnet werden.
+Mögliche Ursache
+• Der Tresor wurde auf einem anderen Gerät erstellt
+• Das eingegebene Passwort ist falsch\n"""
+                    f"• Der Tresor wurde mit einer veralteten Version von {edition} erstellt"
+                )
+                log_msg = "Open failed: signature/digest mismatch (device or password)"
+
+            elif isinstance(e, FileNotFoundError) or "errno 2" in error_msg.lower():
+                user_msg = (
+                    "Der Tresor konnte nicht geöffnet werden.\n\n"
+                    "Mögliche Ursachen:\n"
+                    "• Der Tresor wurde durch fehlerhaftes Kopieren beschädigt\n"
+                    "• Der Speicherplatz Ihres Laufwerks war beim letzten Hinzufügen von Dateien nicht ausreichend\n"
+                    f"• {edition} ist beim Hinzufügen von Dateien zu diesem Tresor unerwartet geschlossen worden\n\n"
+                    "Der Tresor ist irreparabel beschädigt und kann nicht wiederhergestellt werden."
+                )
+                log_msg = f"Open failed: FileNotFoundError ({error_msg})"
+
+            else:
+                user_msg = f"Öffnen fehlgeschlagen:\n{error_msg}"
+                log_msg = f"Open failed: {error_msg}"
+
+            QMessageBox.critical(self, "ANCORATE – Tresorfehler", user_msg)
+            self.append_log(log_msg)
+            # Clean up state on failure
+            self.update_container_path()
+            self.pwd = ""
+            self.master_key = None
+            self.meta = {"files": []}
+            self.flags = 0
 
     def open_container(self):
         """Öffnet einen bestehenden Container"""
@@ -805,9 +825,6 @@ class App(QWidget):
             QMessageBox.warning(self, "Passwort fehlt", "Kein Passwort bereitgestellt.")
             return
 
-        # Add to recent containers on successful open
-        add_recent_container(self.container_path)
-
         try:
             # ------------------------------------------------------------------
             # 4. Datei öffnen
@@ -882,6 +899,8 @@ class App(QWidget):
             )
             self.file_list.setEnabled(True)
             self.refresh_list()
+            # Add to recent containers only after successful open
+            add_recent_container(self.container_path)
 
         except Exception as e:
             error_msg = str(e)
@@ -942,7 +961,7 @@ Mögliche Ursache
             if not pwd:
                 return
 
-            # Container-Daten erzeugen
+        # Container-Daten erzeugen
         salt = secrets.token_bytes(SALT_LEN)
 
         # Flags Device-Binding
@@ -1055,20 +1074,7 @@ Mögliche Ursache
                 self, "Kritischer Fehler", f"Löschvorgang fehlgeschlagen: {e}"
             )
 
-    # ------------------ registrierten Key laden ------------------
-    def load_device_key(self):
-        if not os.path.exists(CONFIG_FILE):
-            return None
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                js = json.load(f)
-            v = js.get("device_key_hex", "")
-            if not v:
-                return None
-            return bytes.fromhex(v)
-        except Exception:
-            return None
-
+    # ------------------ Datei hinzufügen ------------------
     def add_file_dialog(self):
         if not getattr(self, "master_key", None):
             QMessageBox.information(
@@ -1104,6 +1110,9 @@ Mögliche Ursache
             pass
 
         self.pwd = ""
+        # Attempt to zero sensitive key material from memory
+        if self.master_key is not None:
+            _secure_zero_bytes(self.master_key)
         self.master_key = None
         self.meta = {"files": []}
         # Passwort-Änderungs-Zustandsvariablen
@@ -1154,16 +1163,20 @@ Mögliche Ursache
         if not files:
             return
 
-        # Frisches Stop‑Event für diesen Add‑Vorgang,
-        # damit ein vorheriger Abbruch (preview/export) neue Adds nicht blockiert.
-        self.stop_event = threading.Event()
+        # Cancel any previous operation before starting a new one
+        if self.stop_event is not None:
+            self.stop_event.set()
+
+        # Local stop event for this specific add operation
+        add_stop_event = threading.Event()
+        self.stop_event = add_stop_event
 
         v2 = self.master_key
         if len(v2) != 32:
             raise ValueError(f"Ungültige Master-Key-Länge: {len(v2)} Bytes (erwartet 32)")
 
         worker = AddWorker(
-            self.container_path, files, v2, self.flags, stop_event=self.stop_event
+            self.container_path, files, v2, self.flags, stop_event=add_stop_event
         )
 
         thread = QThread()
@@ -1189,7 +1202,7 @@ Mögliche Ursache
 
         # konkreter Modality‑Wert
         self.progress.setWindowTitle(f"ANCORATE {edition}")  # ← hier
-        self.progress.canceled.connect(self.cancel_current)
+        self.progress.canceled.connect(lambda ev=add_stop_event: ev.set())
         self.progress.setValue(0)
         self.progress.show()
 
@@ -1207,10 +1220,6 @@ Mögliche Ursache
         thread.start()
 
     # ------------------ Datei exportieren ------------------
-    def queueing(self):
-        while self.exporting:
-            time.sleep(0.2)
-
     def _selected_meta_indexes(self) -> list[int]:
         indexes = []
         for item in self.file_list.selectedItems():
@@ -1343,12 +1352,17 @@ Mögliche Ursache
             return
 
         # Cache miss: im Hintergrund entschlüsseln und in RAM laden
-        self.stop_event = threading.Event()
+        # Cancel any previous operation before starting a new one
+        if self.stop_event is not None:
+            self.stop_event.set()
+
+        preview_stop_event = threading.Event()
+        self.stop_event = preview_stop_event
         worker = PreviewDecryptWorker(
             self.container_path,
             entry,
             self.master_key,
-            stop_event=self.stop_event,
+            stop_event=preview_stop_event,
             max_bytes=self._preview_max_file_bytes,
         )
         thread = QThread()
@@ -1356,10 +1370,10 @@ Mögliche Ursache
 
         # UI: Fortschrittsdialog
         self.progress = QProgressDialog(
-            "Nehme Änderungen am Tresor vor...", "Abbrechen", 0, 100, self
+            "Entschlüssle Datei für Vorschau...", "Abbrechen", 0, 100, self
         )
         self.progress.setWindowTitle(f"ANCORATE {edition}")
-        self.progress.canceled.connect(self.cancel_current)
+        self.progress.canceled.connect(lambda ev=preview_stop_event: ev.set())
         self.progress.setValue(0)
         self.progress.show()
 
@@ -1427,12 +1441,17 @@ Mögliche Ursache
             )
             return
 
-        self.stop_event = threading.Event()
+        # Cancel any previous operation
+        if self.stop_event is not None:
+            self.stop_event.set()
+
+        edit_stop_event = threading.Event()
+        self.stop_event = edit_stop_event
         worker = ExportWorker(
             self.container_path,
             {**entry, "__save_to": tmp_path},
             self.master_key,
-            stop_event=self.stop_event,
+            stop_event=edit_stop_event,
         )
         thread = QThread()
         worker.moveToThread(thread)
@@ -1441,7 +1460,7 @@ Mögliche Ursache
             "Entschlüssle Datei zum Bearbeiten...", "Abbrechen", 0, 100, self
         )
         self.progress.setWindowTitle(f"ANCORATE {edition}")
-        self.progress.canceled.connect(self.cancel_current)
+        self.progress.canceled.connect(lambda ev=edit_stop_event: ev.set())
         worker.progress.connect(self._on_progress)
         worker.finished.connect(
             lambda p: self._edit_decrypt_finished(p, thread, worker, int(idx), entry, tmp_path)
@@ -1563,7 +1582,12 @@ Mögliche Ursache
             dialog.allow_close = False
             dialog.finish_button.setEnabled(False)
 
-        self.stop_event = threading.Event()
+        # Cancel any previous operation
+        if self.stop_event is not None:
+            self.stop_event.set()
+
+        rewrite_stop_event = threading.Event()
+        self.stop_event = rewrite_stop_event
         worker = RewriteEntryWorker(
             self.container_path,
             dict(self.meta),
@@ -1580,7 +1604,7 @@ Mögliche Ursache
             "Speichere Änderungen im Tresor...", "Abbrechen", 0, 100, self
         )
         self.progress.setWindowTitle(f"ANCORATE {edition}")
-        self.progress.canceled.connect(self.cancel_current)
+        self.progress.canceled.connect(lambda ev=rewrite_stop_event: ev.set())
         worker.progress.connect(self._on_progress)
         worker.finished.connect(lambda m: self._edit_rewrite_finished(m, thread, worker))
         worker.error.connect(lambda e: self._edit_rewrite_error(e, thread, worker))
@@ -1759,11 +1783,16 @@ Mögliche Ursache
 
     def _start_single_export(self, entry: dict, save_to: str):
         self.exporting = True
-        self.stop_event = threading.Event()
+        # Cancel any previous operation
+        if self.stop_event is not None:
+            self.stop_event.set()
+
+        export_stop_event = threading.Event()
+        self.stop_event = export_stop_event
         entry_copy = dict(entry)
         entry_copy["__save_to"] = save_to
         worker = ExportWorker(
-            self.container_path, entry_copy, self.master_key, stop_event=self.stop_event
+            self.container_path, entry_copy, self.master_key, stop_event=export_stop_event
         )
         thread = QThread()
         worker.moveToThread(thread)
@@ -1774,13 +1803,18 @@ Mögliche Ursache
 
     def _start_batch_export(self, entries: list[dict], target_dir: str):
         self.exporting = True
-        self.stop_event = threading.Event()
+        # Cancel any previous operation
+        if self.stop_event is not None:
+            self.stop_event.set()
+
+        batch_stop_event = threading.Event()
+        self.stop_event = batch_stop_event
         worker = ExportBatchWorker(
             self.container_path,
             entries,
             self.master_key,
             target_dir,
-            stop_event=self.stop_event,
+            stop_event=batch_stop_event,
         )
         thread = QThread()
         worker.moveToThread(thread)
@@ -1789,7 +1823,7 @@ Mögliche Ursache
             "Exportiere Dateien...", "Abbrechen", 0, 100, self
         )
         self.progress.setWindowTitle(f"ANCORATE {edition}")
-        self.progress.canceled.connect(self.cancel_current)
+        self.progress.canceled.connect(lambda ev=batch_stop_event: ev.set())
         self.progress.setValue(0)
         self.progress.show()
 
@@ -1862,10 +1896,6 @@ Mögliche Ursache
                     prog = int((total_written / total_work) * 100)
                     self.progress.setValue(prog)
 
-                if chunks_since_events >= 4:
-                    QApplication.processEvents()
-                    chunks_since_events = 0
-
             # Puffer erzwingen
             file_handle.flush()
             os.fsync(file_handle.fileno())
@@ -1900,6 +1930,27 @@ Mögliche Ursache
         try:
             import tempfile as _tf
             container_dir = os.path.dirname(os.path.abspath(self.container_path)) or os.curdir
+
+            # Securely overwrite the blob data before rebuilding the container
+            method = self.data.get("deletion_method", "Standard")
+            self.progress = QProgressDialog(
+                f"Vernichte Datei mit '{method}'...", "Abbrechen", 0, 100, self
+            )
+            self.progress.setWindowTitle(f"ANCORATE {edition}")
+            self.progress.setValue(0)
+            self.progress.show()
+
+            try:
+                with open(self.container_path, "rb+") as fh:
+                    self._secure_overwrite(fh, f_offset, f_length)
+            except Exception as ow_err:
+                self.append_log(f"Warnung: Sicheres Überschreiben fehlgeschlagen: {ow_err}")
+
+            try:
+                self.progress.close()
+            except Exception:
+                pass
+
             with _tf.NamedTemporaryFile(delete=False, dir=container_dir) as tmp:
                 temp_path = tmp.name
 
@@ -2018,17 +2069,19 @@ Mögliche Ursache
         QMessageBox.information(self, "Export fertig", f"Datei gespeichert: {path}")
         self.append_log(f"Export fertig: {path}")
 
-    def cancel_current(self):
-        if hasattr(self, "stop_event") and self.stop_event:
-            self.stop_event.set()
-            self.append_log("Abbruch angefordert.")
-
     def append_log(self, txt):
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {txt}")
         self.status.setText(txt)
 
     def closeEvent(self, event):
         self._end_edit_session()
+
+        # Best effort: clean up any remaining temp files
+        for item in list(self._edit_cleanup_pending):
+            path, _ = item
+            self._secure_purge_file(path, retries=1, delay=0)
+        self._edit_cleanup_pending.clear()
+
         # Einstellungen neu laden für aktuellen confirm_exit Status
         current_settings = load_settings()
         if current_settings.get("confirm_exit", True):
@@ -2044,14 +2097,6 @@ Mögliche Ursache
                 event.ignore()
                 return
 
-        # Cleanup VaultBridge USB monitoring
-        if hasattr(self, 'usb_detector') and self.usb_detector:
-            try:
-                self.usb_detector.stop_monitoring()
-                print("[VAULTBRIDGE] USB monitoring stopped")
-            except Exception as e:
-                print(f"[VAULTBRIDGE] Error stopping USB monitoring: {e}")
-
         event.accept()
 
     # ------------------ Worker Callbacks ------------------
@@ -2062,12 +2107,6 @@ Mögliche Ursache
             self.progress.setValue(v)
         except Exception as e:
             print(f"Fehler beim Update des Progressbars: {e}")
-
-    def _on_finished(self):
-        """Wird aufgerufen, wenn der Worker fertig ist."""
-        self.progress.setValue(0)
-        self.append_log("Vorgang abgeschlossen.")
-        self.refresh_list()
 
     # ------------------ Suchfunktion ------------------
     def start_search(self):
@@ -2123,9 +2162,12 @@ Mögliche Ursache
             result_mapping = {}
             if intelligence_results:
                 for result in intelligence_results:
-                    if result.get("filename"):
-                        result_mapping[result["filename"]] = result
-                    result_mapping[result["document_name"]] = result
+                    fname = result.get("filename")
+                    if fname:
+                        result_mapping[fname] = result
+                    docname = result.get("document_name")
+                    if docname:
+                        result_mapping[docname] = result
 
             for idx, ent in enumerate(files):
                 name = ent.get("name", "<unnamed>")
@@ -2139,10 +2181,8 @@ Mögliche Ursache
                     size_text = f"{size / 1024**2:.2f} MB"
                 elif size < 1024**4:
                     size_text = f"{size / 1024**3:.2f} GB"
-                elif size >= 1024**4:
-                    size_text = f"{size / 1024**4:.2f} TB"
                 else:
-                    size_text = f"{size / 1024**5:.2f} PB"
+                    size_text = f"{size / 1024**4:.2f} TB"
 
                 if intelligence_results is not None:
                     result = result_mapping.get(name)

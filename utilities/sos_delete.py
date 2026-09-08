@@ -8,42 +8,7 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 
-
-# -----------------------------
-# Helper Functions
-# -----------------------------
-
-def get_app_icon():
-    """
-    Lädt das passende Icon-Format für die aktuelle Plattform.
-    """
-    import platform
-    system = platform.system()
-    
-    # Verschiedene Icon-Formate versuchen
-    icon_paths = []
-    base_dir = os.path.dirname(__file__)
-    
-    if system == "Windows":
-        icon_paths = [
-            os.path.join(base_dir, "icon.ico"),
-            os.path.join(base_dir, "icon.png"),
-        ]
-    else:
-        icon_paths = [
-            os.path.join(base_dir, "icon.png"),
-            os.path.join(base_dir, "icon_64x64.png"),
-            os.path.join(base_dir, "icon_48x48.png"),
-            os.path.join(base_dir, "icon_32x32.png"),
-        ]
-    
-    # Erstes existierendes Icon zurückgeben
-    for path in icon_paths:
-        if os.path.exists(path):
-            return QIcon(path)
-    
-    # Fallback: Leeres Icon
-    return QIcon()
+from utilities import get_app_icon
 
 
 # -----------------------------
@@ -249,7 +214,6 @@ class SaltScannerUI(QWidget):
             
             # Complete deletion
             QTimer.singleShot(0, lambda: self._delete_complete(deleted, total))
-            self._deleting = False
         
         # Start deletion in background thread
         threading.Thread(target=delete_worker, daemon=True).start()

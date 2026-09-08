@@ -51,7 +51,7 @@ def main():
     import threading
 
     from PyQt6.QtCore import QTimer
-    from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
+    from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QStyleFactory
     from utilities.screenshot_protection import install_screenshot_protection
     from utilities.settings import load_settings
 

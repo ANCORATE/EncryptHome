@@ -13,6 +13,7 @@ from PyQt6.QtGui import *
 from PyQt6.QtWidgets import *
 
 from .sos_delete import SaltScannerUI
+from . import get_app_icon
 
 # --- Setup Pfade & Konstanten ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -46,36 +47,6 @@ VERSION_YEAR = "27"
 VERSION_FULL = "27.0-beta.1"
 
 
-def get_app_icon():
-    """
-    Lädt das passende Icon-Format für die aktuelle Plattform.
-    """
-    import platform
-    system = platform.system()
-    
-    # Verschiedene Icon-Formate versuchen
-    icon_paths = []
-    
-    if system == "Windows":
-        icon_paths = [
-            os.path.join(BASE_DIR, "icon.ico"),
-            os.path.join(BASE_DIR, "icon.png"),
-        ]
-    else:
-        icon_paths = [
-            os.path.join(BASE_DIR, "icon.png"),
-            os.path.join(BASE_DIR, "icon_64x64.png"),
-            os.path.join(BASE_DIR, "icon_48x48.png"),
-            os.path.join(BASE_DIR, "icon_32x32.png"),
-        ]
-    
-    # Erstes existierendes Icon zurückgeben
-    for path in icon_paths:
-        if os.path.exists(path):
-            return QIcon(path)
-    
-    # Fallback: Leeres Icon
-    return QIcon()
 UPDATE_URL = "https://ancorate.github.io/latest/EncryptHome/latest.json"
 
 DEFAULT_SETTINGS = {

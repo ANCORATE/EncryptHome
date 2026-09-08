@@ -209,7 +209,7 @@ class ExportWorker(QObject):
         container_path: str,
         meta_entry: dict,
         master_key: bytes,
-        stop_event: threading.Event = None,
+        stop_event: Optional[threading.Event] = None,
     ):
         super().__init__()
         self.container_path = container_path
@@ -270,7 +270,7 @@ class ExportBatchWorker(QObject):
         entries: list[dict],
         master_key: bytes,
         target_dir: str,
-        stop_event: threading.Event = None,
+        stop_event: Optional[threading.Event] = None,
     ):
         super().__init__()
         self.container_path = container_path
@@ -319,7 +319,7 @@ class RewriteEntryWorker(QObject):
         new_data_path: str,
         master_key: bytes,
         flags: int,
-        stop_event: threading.Event = None,
+        stop_event: Optional[threading.Event] = None,
     ):
         super().__init__()
         self.container_path = container_path

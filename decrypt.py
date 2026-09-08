@@ -11,10 +11,6 @@ from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-CHUNK = 128 * 1024
-
-from base import derive_subkey
-
 
 def decrypt_key(path: str) -> bytes:
     """
