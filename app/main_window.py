@@ -2514,6 +2514,12 @@ Mögliche Ursache
             ov.set_text(title, hint, buttons=True)
         ov.show()
         self.file_list._center_overlay(ov)
+        QTimer.singleShot(
+            0,
+            lambda view=self.file_list, overlay=ov: (
+                view._center_overlay(overlay) if overlay.isVisible() else None
+            ),
+        )
 
     @staticmethod
     def _search_terms(query: str) -> list:
@@ -2530,6 +2536,12 @@ Mögliche Ursache
         ov.set_text(title, hint, buttons=False)
         ov.show()
         self.file_list._center_overlay(ov)
+        QTimer.singleShot(
+            0,
+            lambda view=self.file_list, overlay=ov: (
+                view._center_overlay(overlay) if overlay.isVisible() else None
+            ),
+        )
 
     def refresh_list(self, searching: bool = False):
         if not getattr(self.file_list, "isEnabled", lambda: True)():

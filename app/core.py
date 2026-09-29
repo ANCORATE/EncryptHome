@@ -443,11 +443,8 @@ def is_device_registered() -> bool:
 def mark_device_registered():
     """Mark this device as registered"""
     ensure_config_dir()
-    try:
-        with open(REGISTRATION_MARKER, "w") as f:
-            f.write("registered")
-    except Exception:
-        pass
+    with open(REGISTRATION_MARKER, "w", encoding="utf-8") as f:
+        f.write("registered")
 
 
 def _recent_containers_key():

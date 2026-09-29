@@ -37,17 +37,25 @@ und dauerhaft an dieses Gerät gebunden."""
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
 
-        self.key_box = QLineEdit("PC-Key wird erzeugt...")
+        self.key_box = QLineEdit("Gerät ist noch nicht registriert.")
         self.key_box.setReadOnly(True)
         layout.addWidget(self.key_box)
 
-        self.btn_done = QPushButton("Fertig")
+        self.btn_done = QPushButton("Gerät registrieren")
         self.btn_done.setObjectName("primary")
         self.btn_done.clicked.connect(self.finish)
         layout.addWidget(self.btn_done)
 
     def finish(self):
-        secret = auto_register_device()
+        try:
+            secret = auto_register_device()
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Registrierung fehlgeschlagen",
+                f"Die Gerätebindung konnte nicht gespeichert werden:\n{error}",
+            )
+            return
 
         masked = "*" * len(secret.hex())
         self.key_box.setText(masked)
@@ -305,8 +313,9 @@ class FileTree(QTreeWidget):
         self._overlay = widget
 
     def _center_overlay(self, ov):
-        x = max(0, (self.width() - ov.width()) // 2)
-        y = max(0, (self.height() - ov.height()) // 2)
+        area = self.viewport().geometry()
+        x = max(area.x(), area.x() + (area.width() - ov.width()) // 2)
+        y = max(area.y(), area.y() + (area.height() - ov.height()) // 2)
         ov.move(x, y)
 
 
@@ -414,8 +423,9 @@ class FileGrid(QListWidget):
         self._overlay = widget
 
     def _center_overlay(self, ov):
-        x = max(0, (self.width() - ov.width()) // 2)
-        y = max(0, (self.height() - ov.height()) // 2)
+        area = self.viewport().geometry()
+        x = max(area.x(), area.x() + (area.width() - ov.width()) // 2)
+        y = max(area.y(), area.y() + (area.height() - ov.height()) // 2)
         ov.move(x, y)
 
 
@@ -1050,12 +1060,20 @@ class TermsOfServiceDialog(QDialog):
 
         self.text_area = QTextEdit()
         self.text_area.setReadOnly(True)
-        self.text_area.setPlainText(self.load_terms_text())
+        terms_text = self.load_terms_text()
+        self.terms_available = terms_text is not None
+        self.text_area.setPlainText(
+            terms_text
+            if self.terms_available
+            else "Die Nutzungsbedingungen konnten nicht geladen werden. "
+            "Bitte prüfen Sie die Installation und starten Sie erneut."
+        )
         layout.addWidget(self.text_area, stretch=1)
 
         self.checkbox = QCheckBox(
             "Ich habe die Terms of Service gelesen und stimme ihnen zu."
         )
+        self.checkbox.setEnabled(self.terms_available)
         layout.addWidget(self.checkbox)
 
         self.buttons = QDialogButtonBox(
@@ -1072,7 +1090,7 @@ class TermsOfServiceDialog(QDialog):
 
     def toggle_accept(self):
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(
-            self.checkbox.isChecked()
+            self.terms_available and self.checkbox.isChecked()
         )
 
     def load_terms_text(self):
@@ -1081,9 +1099,12 @@ class TermsOfServiceDialog(QDialog):
             os.path.join(os.path.dirname(sys.argv[0]), "TOS.txt"),
         ):
             if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    return f.read()
-        return "Error: TOS.txt not found."
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        return f.read()
+                except (OSError, UnicodeError):
+                    continue
+        return None
 
 
 class WelcomeOverlay(QDialog):

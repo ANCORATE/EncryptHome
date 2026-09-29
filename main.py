@@ -105,6 +105,10 @@ def main():
     if tos.exec() != QDialog.DialogCode.Accepted:
         sys.exit(0)
 
+    setup = SetupDialog()
+    if setup.exec() != QDialog.DialogCode.Accepted:
+        sys.exit(0)
+
     # Login with setup relaunch handling
     while True:
         login = LoginDialog()
