@@ -544,6 +544,7 @@ class ChangelogWorker(QThread):
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("SettingsDialog")
         self.setWindowTitle(f"ANCORATE EncryptHome {VERSION_YEAR} – Einstellungen")
         self.setWindowIcon(get_app_icon())
         self.setMinimumSize(900, 500)  # Allow user to resize but not too small

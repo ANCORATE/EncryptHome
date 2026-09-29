@@ -82,7 +82,8 @@ def _secure_delete_plaintext(path: str, method: str):
 
 class DeleteWorker(QObject):
     progress = pyqtSignal(int)
-    finished = pyqtSignal(str, object)
+    committing = pyqtSignal()
+    finished = pyqtSignal(str, object, str)
     error = pyqtSignal(str)
 
     def __init__(self, container_path, meta, entry_index, master_key, method, stop_event):
@@ -112,12 +113,13 @@ class DeleteWorker(QObject):
                 file_handle.write(secrets.token_bytes(current_chunk))
                 bytes_left -= current_chunk
                 total_written += current_chunk
-                self.progress.emit(min(100, int(total_written / total_work * 100)))
+                self.progress.emit(50 + min(50, int(total_written / total_work * 50)))
             file_handle.flush()
             os.fsync(file_handle.fileno())
 
     def run(self):
         temp_path = None
+        original = None
         try:
             target = self.meta["files"][self.entry_index]
             offset = int(target["offset"])
@@ -125,37 +127,47 @@ class DeleteWorker(QObject):
             name = target["name"]
             container_dir = os.path.dirname(os.path.abspath(self.container_path)) or os.curdir
 
-            with open(self.container_path, "rb+") as handle:
-                self._secure_overwrite(handle, offset, length)
+            original = open(self.container_path, "rb+")
+            original.seek(0, os.SEEK_END)
+            source_size = original.tell()
+            if source_size < HEADER_LEN + META_LEN_SIZE:
+                raise ValueError("Container ist zu kurz.")
+            original.seek(-META_LEN_SIZE, os.SEEK_END)
+            meta_len_data = original.read(META_LEN_SIZE)
+            if len(meta_len_data) != META_LEN_SIZE:
+                raise ValueError("Metadatenlänge konnte nicht gelesen werden.")
+            meta_len = struct.unpack("<Q", meta_len_data)[0]
+            data_end = source_size - META_LEN_SIZE - meta_len
+            if offset < HEADER_LEN or length < 0 or offset + length > data_end:
+                raise ValueError("Dateieintrag liegt außerhalb des Tresors.")
 
             with tempfile.NamedTemporaryFile(delete=False, dir=container_dir) as temp:
                 temp_path = temp.name
+                destination = temp
+                original.seek(0)
+                header = original.read(HEADER_LEN)
+                if len(header) != HEADER_LEN:
+                    raise IOError("Container-Header unvollständig.")
+                destination.write(header)
 
-            with open(self.container_path, "rb") as source:
-                header = source.read(HEADER_LEN)
-                with open(temp_path, "wb") as destination:
-                    destination.write(header)
-                    remaining = offset - HEADER_LEN
+                bytes_to_copy = data_end - HEADER_LEN - length
+                bytes_copied = 0
+                for start, remaining in (
+                    (HEADER_LEN, offset - HEADER_LEN),
+                    (offset + length, data_end - (offset + length)),
+                ):
+                    original.seek(start)
                     while remaining > 0:
                         if self.stop_event.is_set():
                             raise RuntimeError("Vorgang abgebrochen")
-                        chunk = source.read(min(1024 * 1024, remaining))
+                        chunk = original.read(min(1024 * 1024, remaining))
                         if not chunk:
-                            raise IOError("Unexpected EOF before deleted region")
+                            raise IOError("Unerwartetes Dateiende im Tresor.")
                         destination.write(chunk)
                         remaining -= len(chunk)
-
-                    source.seek(offset + length)
-                    data_end = os.path.getsize(self.container_path) - META_LEN_SIZE
-                    after_deleted = data_end - (offset + length)
-                    while after_deleted > 0:
-                        if self.stop_event.is_set():
-                            raise RuntimeError("Vorgang abgebrochen")
-                        chunk = source.read(min(1024 * 1024, after_deleted))
-                        if not chunk:
-                            raise IOError("Unexpected EOF after deleted region")
-                        destination.write(chunk)
-                        after_deleted -= len(chunk)
+                        bytes_copied += len(chunk)
+                        if bytes_to_copy:
+                            self.progress.emit(min(50, int(bytes_copied / bytes_to_copy * 50)))
 
                 new_meta = {**self.meta, "files": [dict(item) for item in self.meta["files"]]}
                 new_meta["files"].pop(self.entry_index)
@@ -164,18 +176,28 @@ class DeleteWorker(QObject):
                         item["offset"] -= length
 
                 new_meta_blob = encrypt_meta(new_meta, self.master_key)
-                with open(temp_path, "ab") as destination:
-                    destination.write(new_meta_blob)
-                    destination.write(struct.pack("<Q", len(new_meta_blob)))
+                destination.write(new_meta_blob)
+                destination.write(struct.pack("<Q", len(new_meta_blob)))
+                destination.flush()
+                os.fsync(destination.fileno())
 
             if self.stop_event.is_set():
                 raise RuntimeError("Vorgang abgebrochen")
+            self.committing.emit()
             os.replace(temp_path, self.container_path)
             temp_path = None
-            self.finished.emit(name, new_meta)
+
+            overwrite_error = ""
+            try:
+                self._secure_overwrite(original, offset, length)
+            except Exception as error:
+                overwrite_error = str(error)
+            self.finished.emit(name, new_meta, overwrite_error)
         except Exception as error:
             self.error.emit(str(error) or repr(error))
         finally:
+            if original is not None:
+                original.close()
             if temp_path:
                 try:
                     os.remove(temp_path)

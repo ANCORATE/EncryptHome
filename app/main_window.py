@@ -84,6 +84,11 @@ class App(QMainWindow):
         self.password_change_in_progress = False
         self.stop_event = None
         self.progress = None
+        self._delete_in_progress = False
+        self._delete_close_after = False
+        self._delete_committing = False
+        self._worker_threads = {}
+        self._close_after_workers = False
         self._lan_sharing = False
         self._lan_threads = []
         self._lan_tcp_sock = None
@@ -281,6 +286,7 @@ class App(QMainWindow):
             return
 
         self.update_worker = StartupUpdateWorker()
+        self._track_worker_thread(self.update_worker, container_operation=False)
         self.update_worker.finished.connect(self.on_update_check_finished)
         self.update_worker.error.connect(self.on_update_check_error)
         self.update_worker.start()
@@ -296,6 +302,13 @@ class App(QMainWindow):
             return False
 
     def on_update_check_finished(self, data: dict):
+        worker = self.update_worker
+        if worker is not None:
+            worker.wait()
+            worker.deleteLater()
+            self._release_worker_thread(worker)
+        if self._close_after_workers:
+            return
         if not self.is_update_available(data):
             return
 
@@ -306,7 +319,36 @@ class App(QMainWindow):
         self.show_update_news(data)
 
     def on_update_check_error(self, error_msg: str):
+        worker = self.update_worker
+        if worker is not None:
+            worker.wait()
+            worker.deleteLater()
+            self._release_worker_thread(worker)
         print(f"[UPDATE] Updatecheck fehlgeschlagen: {error_msg}")
+
+    def _track_worker_thread(self, thread, stop_event=None, *, container_operation=True):
+        self._worker_threads[thread] = (stop_event, container_operation)
+
+    def _container_worker_active(self):
+        return any(
+            container_operation
+            for _stop_event, container_operation in self._worker_threads.values()
+        )
+
+    def _ensure_container_idle(self):
+        if not self._container_worker_active():
+            return True
+        QMessageBox.information(
+            self,
+            "Vorgang läuft",
+            "Bitte warten Sie, bis der laufende Tresorvorgang abgeschlossen ist.",
+        )
+        return False
+
+    def _release_worker_thread(self, thread):
+        self._worker_threads.pop(thread, None)
+        if self._close_after_workers and not self._worker_threads:
+            QTimer.singleShot(0, self.close)
 
     def show_update_news(self, data: dict):
         if self.update_news_shown:
@@ -636,8 +678,10 @@ class App(QMainWindow):
             save_recent_containers([])
 
     def _open_recent_vault(self, path):
+        if not self._ensure_container_idle():
+            return
         if path and os.path.exists(path):
-            self.update_container_path(path)
+            self.container_path = path
             self.open_container()
         else:
             QMessageBox.warning(self, "Fehler", "Container existiert nicht mehr.")
@@ -645,6 +689,8 @@ class App(QMainWindow):
 
     def change_container_password_dialog(self):
             """Show password change dialog for current container"""
+            if not self._ensure_container_idle():
+                return
             if getattr(self, "_edit_session", None):
                 QMessageBox.information(
                     self, "Info", "Schließe zuerst die laufende In-Tresor-Bearbeitung ab."
@@ -923,6 +969,8 @@ class App(QMainWindow):
 
     # ------------------ Container wählen / erstellen ------------------
     def choose_container(self, mode: int = 0):
+        if not self._ensure_container_idle():
+            return
         if not mode:
             action = QMessageBox()
             action.setWindowIcon(get_app_icon())
@@ -976,7 +1024,10 @@ class App(QMainWindow):
 
         # 3. Pfad setzen
         if path:
-            self.update_container_path(path)
+            # Keep the selection pending until opening or creation succeeds.
+            # This prevents a cancelled/failed operation from advertising a
+            # vault that is not actually open in the header.
+            self.container_path = path
             if creating:
                 self.create_container()
             else:
@@ -1015,7 +1066,7 @@ class App(QMainWindow):
         """Öffnet einen bestehenden Container mit dem angegebenen Passwort"""
 
         # Use provided path and password
-        self.update_container_path(container_path)
+        self.container_path = container_path
         pwd = password
 
         try:
@@ -1077,6 +1128,7 @@ class App(QMainWindow):
             self.master_key = master
             self.meta = meta
             self.flags = flags
+            self.update_container_path(self.container_path)
             self._record_container_opened()
             self._auto_lock_rearm()
 
@@ -1164,6 +1216,7 @@ Mögliche Ursache
         while not pwd:
             pwd = self.get_pwd_dialog()
             if not pwd:
+                self.update_container_path()
                 return
         if not pwd:
             QMessageBox.warning(self, "Passwort fehlt", "Kein Passwort bereitgestellt.")
@@ -1228,6 +1281,7 @@ Mögliche Ursache
             self.master_key = master
             self.meta = meta
             self.flags = flags
+            self.update_container_path(self.container_path)
             self._record_container_opened()
             self._auto_lock_rearm()
 
@@ -1283,6 +1337,8 @@ Mögliche Ursache
             return
 
     def create_container(self):
+        if not self._ensure_container_idle():
+            return
         if self.container_path is None:
             QMessageBox.warning(self, "Fehler", "Wähle zuerst einen Dateipfad aus.")
             return
@@ -1336,6 +1392,7 @@ Mögliche Ursache
         self.meta = meta
         self.flags = flags
         self.pwd = pwd
+        self.update_container_path(self.container_path)
         self._auto_lock_rearm()
         self._set_vault_actions_enabled(True)
         self.refresh_list()
@@ -1344,6 +1401,8 @@ Mögliche Ursache
         self.append_log("Container created.")
 
     def delete_container(self):
+        if not self._ensure_container_idle():
+            return
         if getattr(self, "_edit_session", None):
             QMessageBox.information(
                 self, "Info", "Schließe zuerst die laufende In-Tresor-Bearbeitung ab."
@@ -1461,6 +1520,8 @@ Mögliche Ursache
 
     # ------------------ Container Operationen ------------------
     def close_container(self):
+        if not self._ensure_container_idle():
+            return
         self._auto_lock_timer.stop()
         self._end_edit_session()
         if hasattr(self, "stop_event") and self.stop_event:
@@ -1510,6 +1571,8 @@ Mögliche Ursache
         Datei(en) zum Tresor hinzufügen.
         :param filepaths: Liste von Pfaden oder None → Dialog öffnen
         """
+        if not self._ensure_container_idle():
+            return
         if getattr(self, "_edit_session", None):
             QMessageBox.information(
                 self, "Info", "Schließe zuerst die laufende In-Tresor-Bearbeitung ab, bevor du Dateien hinzufügst."
@@ -1550,6 +1613,7 @@ Mögliche Ursache
         )
 
         thread = QThread()
+        self._track_worker_thread(thread, add_stop_event)
         worker.moveToThread(thread)
 
         # Verbindung für Fortschritt und Fehler
@@ -1611,6 +1675,8 @@ Mögliche Ursache
         return sorted(unique_indexes)
 
     def export_selected(self, idx: int = 0, mode: int = 0, target_dir: str = ""):
+        if not self._ensure_container_idle():
+            return
         if self.changing_password or self.password_change_in_progress:
             QMessageBox.information(
                 self, 
@@ -1701,6 +1767,8 @@ Mögliche Ursache
             self._preview_cache_bytes -= len(d)
 
     def preview_selected(self, *_args):
+        if not self._ensure_container_idle():
+            return
         if not self.container_path or not self.master_key:
             QMessageBox.information(
                 self, "Vorschau", "Bitte zuerst einen Tresor öffnen."
@@ -1737,6 +1805,7 @@ Mögliche Ursache
             max_bytes=self._preview_max_file_bytes,
         )
         thread = QThread()
+        self._track_worker_thread(thread, preview_stop_event)
         worker.moveToThread(thread)
 
         # UI: Fortschrittsdialog
@@ -1759,6 +1828,9 @@ Mögliche Ursache
             thread.wait()
             worker.deleteLater()
             thread.deleteLater()
+            self._release_worker_thread(thread)
+            if self._close_after_workers:
+                return
             self._preview_cache_put(key, data, info_obj)
             show_preview(self, entry.get("name", "Datei"), data, info_obj)
 
@@ -1769,6 +1841,8 @@ Mögliche Ursache
 
     # ------------------ In-Tresor-Bearbeitung (externer Editor) ------------------
     def start_in_vault_edit(self, *_args):
+        if not self._ensure_container_idle():
+            return
         if not self.container_path or not self.master_key:
             QMessageBox.information(
                 self, "Bearbeiten", "Bitte zuerst einen Tresor öffnen."
@@ -1825,6 +1899,7 @@ Mögliche Ursache
             stop_event=edit_stop_event,
         )
         thread = QThread()
+        self._track_worker_thread(thread, edit_stop_event)
         worker.moveToThread(thread)
 
         self.progress = QProgressDialog(
@@ -1862,6 +1937,12 @@ Mögliche Ursache
         thread.wait()
         worker.deleteLater()
         thread.deleteLater()
+        self._release_worker_thread(thread)
+
+        if self._close_after_workers:
+            if not self._secure_purge_file(tmp_path):
+                self._discard_edit_tmp(tmp_path)
+            return
 
         if not os.path.isfile(tmp_path) or os.path.getsize(tmp_path) <= 0:
             if not self._secure_purge_file(tmp_path):
@@ -1911,11 +1992,13 @@ Mögliche Ursache
         thread.wait()
         worker.deleteLater()
         thread.deleteLater()
+        self._release_worker_thread(thread)
         if not self._secure_purge_file(tmp_path):
             self._discard_edit_tmp(tmp_path)
-        QMessageBox.critical(
-            self, "Fehler", f"Entschlüsselung fehlgeschlagen:\n{error}"
-        )
+        if not self._close_after_workers:
+            QMessageBox.critical(
+                self, "Fehler", f"Entschlüsselung fehlgeschlagen:\n{error}"
+            )
 
     def _poll_edit_session(self):
         s = getattr(self, "_edit_session", None)
@@ -1969,6 +2052,7 @@ Mögliche Ursache
             stop_event=self.stop_event,
         )
         thread = QThread()
+        self._track_worker_thread(thread, rewrite_stop_event)
         worker.moveToThread(thread)
 
         self.progress = QProgressDialog(
@@ -1991,6 +2075,7 @@ Mögliche Ursache
         thread.wait()
         worker.deleteLater()
         thread.deleteLater()
+        self._release_worker_thread(thread)
         self.meta = new_meta
         s = getattr(self, "_edit_session", None)
         if s:
@@ -2022,6 +2107,7 @@ Mögliche Ursache
         thread.wait()
         worker.deleteLater()
         thread.deleteLater()
+        self._release_worker_thread(thread)
         s = getattr(self, "_edit_session", None)
         if s:
             s["rewriting"] = False
@@ -2037,11 +2123,12 @@ Mögliche Ursache
                 s["last_stat"] = (st.st_mtime_ns, st.st_size)
             except OSError:
                 s["last_stat"] = None
-        QMessageBox.critical(
-            self,
-            "Fehler",
-            f"Änderungen konnten nicht im Tresor gespeichert werden:\n{error}",
-        )
+        if not self._close_after_workers:
+            QMessageBox.critical(
+                self,
+                "Fehler",
+                f"Änderungen konnten nicht im Tresor gespeichert werden:\n{error}",
+            )
         self.append_log(f"Fehler beim Zurückschreiben in den Tresor: {error}")
 
     def _end_edit_session(self):
@@ -2132,6 +2219,8 @@ Mögliche Ursache
         QTimer.singleShot(10000, _tick)
 
     def export_all(self):
+        if not self._ensure_container_idle():
+            return
         if self.changing_password or self.password_change_in_progress:
             QMessageBox.information(
                 self, 
@@ -2166,6 +2255,7 @@ Mögliche Ursache
             self.container_path, entry_copy, self.master_key, stop_event=export_stop_event
         )
         thread = QThread()
+        self._track_worker_thread(thread, export_stop_event)
         worker.moveToThread(thread)
         worker.finished.connect(lambda p: self._export_finished(p, thread, worker))
         worker.error.connect(lambda e: self._worker_error(e, thread, worker))
@@ -2188,6 +2278,7 @@ Mögliche Ursache
             stop_event=batch_stop_event,
         )
         thread = QThread()
+        self._track_worker_thread(thread, batch_stop_event)
         worker.moveToThread(thread)
 
         self.progress = QProgressDialog(
@@ -2215,6 +2306,7 @@ Mögliche Ursache
         thread.wait()
         worker.deleteLater()
         thread.deleteLater()
+        self._release_worker_thread(thread)
         self.exporting = False
         if paths:
             self.append_log(f"Export fertig: {len(paths)} Datei(en)")
@@ -2252,6 +2344,22 @@ Mögliche Ursache
             os.fsync(file_handle.fileno())
 
     def delete_selected(self):
+        if self._delete_in_progress:
+            return
+        if not self._ensure_container_idle():
+            return
+        if (
+            self.exporting
+            or self.changing_password
+            or self.password_change_in_progress
+            or (self.progress is not None and self.progress.isVisible())
+        ):
+            QMessageBox.information(
+                self,
+                "Vorgang läuft",
+                "Schließen Sie zuerst den laufenden Datei- oder Tresorvorgang ab.",
+            )
+            return
         if getattr(self, "_edit_session", None):
             QMessageBox.information(
                 self, "Info", "Schließe zuerst die laufende In-Tresor-Bearbeitung ab."
@@ -2273,11 +2381,11 @@ Mögliche Ursache
             return
 
         target = self.meta["files"][int(idx)]
-        f_offset = target["offset"]
-        f_length = target["length"]
-        f_name = target["name"]
-
         delete_stop_event = threading.Event()
+        self._delete_in_progress = True
+        self._delete_committing = False
+        self._set_vault_actions_enabled(False)
+        self._set_views_enabled(False)
         worker = DeleteWorker(
             self.container_path,
             {
@@ -2290,6 +2398,7 @@ Mögliche Ursache
             delete_stop_event,
         )
         thread = QThread()
+        self._track_worker_thread(thread, delete_stop_event)
         worker.moveToThread(thread)
         self.progress = QProgressDialog(
             f"Vernichte Datei mit '{method}'...", "Abbrechen", 0, 100, self
@@ -2299,8 +2408,11 @@ Mögliche Ursache
         self.progress.canceled.connect(delete_stop_event.set)
         self.progress.show()
         worker.progress.connect(self._on_progress)
+        worker.committing.connect(self._delete_commit_started)
         worker.finished.connect(
-            lambda name, new_meta: self._delete_finished(name, new_meta, thread, worker)
+            lambda name, new_meta, overwrite_error: self._delete_finished(
+                name, new_meta, overwrite_error, thread, worker
+            )
         )
         worker.error.connect(
             lambda error: self._delete_error(error, thread, worker, delete_stop_event)
@@ -2308,29 +2420,58 @@ Mögliche Ursache
         thread.started.connect(worker.run)
         thread.start()
 
-    def _delete_finished(self, name, new_meta, thread, worker):
-        self.progress.close()
+    def _delete_commit_started(self):
+        self._delete_committing = True
+        if self.progress is not None:
+            self.progress.setLabelText(
+                "Datei entfernt. Der alte Datenbereich wird noch sicher überschrieben..."
+            )
+            self.progress.setCancelButton(None)
+
+    def _finish_delete_operation(self, thread, worker):
+        if self.progress is not None:
+            self.progress.close()
+            self.progress = None
         thread.quit()
         thread.wait()
         worker.deleteLater()
         thread.deleteLater()
+        self._release_worker_thread(thread)
+
+        self._delete_in_progress = False
+        self._delete_committing = False
+        self._set_views_enabled(bool(self.master_key))
+        self._set_vault_actions_enabled(bool(self.master_key))
+
+    def _delete_finished(self, name, new_meta, overwrite_error, thread, worker):
+        self._finish_delete_operation(thread, worker)
         self.meta = new_meta
         self.append_log(f"Erfolgreich vernichtet: {name}")
         self.refresh_list()
-        show_toast(self, "Erfolg", "Die Datei wurde unwiderruflich gelöscht.")
+        if overwrite_error:
+            QMessageBox.warning(
+                self,
+                "Datei entfernt",
+                "Der Eintrag wurde aus dem Tresor entfernt, aber der alte Datenbereich "
+                f"konnte nicht vollständig überschrieben werden:\n{overwrite_error}",
+            )
+        else:
+            show_toast(self, "Erfolg", "Die Datei wurde unwiderruflich gelöscht.")
+        if self._delete_close_after:
+            self._delete_close_after = False
+            self.close()
 
     def _delete_error(self, error, thread, worker, stop_event):
-        self.progress.close()
-        thread.quit()
-        thread.wait()
-        worker.deleteLater()
-        thread.deleteLater()
+        self._finish_delete_operation(thread, worker)
         if stop_event.is_set():
             self.append_log("Löschvorgang abgebrochen")
             show_toast(self, "Abgebrochen", "Löschvorgang abgebrochen.")
-            return
-        self.append_log(f"FEHLER beim Löschen: {error}")
-        QMessageBox.critical(self, "Kritischer Fehler", f"Löschvorgang abgebrochen: {error}")
+        else:
+            self.append_log(f"FEHLER beim Löschen: {error}")
+            QMessageBox.critical(self, "Kritischer Fehler", f"Löschvorgang abgebrochen: {error}")
+        if self._delete_close_after:
+            self._delete_close_after = False
+            self.close()
 
     # ------------------ Worker Callbacks ------------------
     def _add_finished(self, added, thread, worker):
@@ -2342,6 +2483,7 @@ Mögliche Ursache
         thread.wait()
         worker.deleteLater()
         thread.deleteLater()
+        self._release_worker_thread(thread)
         self.append_log("Added files: " + ", ".join(added))
         try:
             with open(self.container_path, "rb") as fh:
@@ -2375,12 +2517,14 @@ Mögliche Ursache
         # Worker und Thread freigeben
         worker.deleteLater()
         thread.deleteLater()
+        self._release_worker_thread(thread)
 
         # Fehler anzeigen und loggen
         error_msg = error if isinstance(error, str) else str(error)
         if not error_msg:
             error_msg = repr(error)
-        QMessageBox.critical(self, "Fehler", error_msg)
+        if not self._close_after_workers:
+            QMessageBox.critical(self, "Fehler", error_msg)
         self.append_log(f"Fehler: {error_msg}")
 
     def _export_finished(self, path, thread, worker):
@@ -2388,6 +2532,7 @@ Mögliche Ursache
         thread.wait()
         worker.deleteLater()
         thread.deleteLater()
+        self._release_worker_thread(thread)
         self.exporting = False
         show_toast(self, "Export fertig", f"Datei gespeichert: {path}")
         self.append_log(f"Export fertig: {path}")
@@ -2397,6 +2542,55 @@ Mögliche Ursache
         self.status.setText(txt)
 
     def closeEvent(self, event):
+        if self._delete_in_progress:
+            if self._delete_committing:
+                self._delete_close_after = True
+                event.ignore()
+                return
+            if not self._delete_close_after:
+                reply = QMessageBox.question(
+                    self,
+                    "Löschvorgang abbrechen?",
+                    "Der laufende Löschvorgang muss beendet werden, bevor das Programm schließen kann. Abbrechen?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    event.ignore()
+                    return
+                self._delete_close_after = True
+                if self._delete_in_progress and self.progress is not None:
+                    self.progress.cancel()
+                elif not self._delete_in_progress:
+                    QTimer.singleShot(0, self.close)
+            event.ignore()
+            return
+
+        if self._worker_threads:
+            if not self._close_after_workers:
+                reply = QMessageBox.question(
+                    self,
+                    "Vorgänge werden beendet",
+                    "Es laufen noch Hintergrundvorgänge. Möchten Sie sie abbrechen und nach ihrem sicheren Ende schließen?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    event.ignore()
+                    return
+
+                self._close_after_workers = True
+                for stop_event, _container_operation in self._worker_threads.values():
+                    if stop_event is not None:
+                        stop_event.set()
+                if self.progress is not None and self.progress.isVisible():
+                    self.progress.setLabelText("Vorgang wird sicher beendet...")
+                    self.progress.setCancelButton(None)
+            if not self._worker_threads:
+                QTimer.singleShot(0, self.close)
+            event.ignore()
+            return
+
         self._end_edit_session()
 
         # Schlaf-/Lock-Monitor stoppen (optionaler gdbus-Subprozess beenden)

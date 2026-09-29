@@ -39,6 +39,7 @@ def change_container_password(container_path: str, current_master_key: bytes, cu
     Returns True if successful, False if cancelled
     """
     dialog = QDialog(parent)
+    dialog.setObjectName("SecurityDialog")
     dialog.setWindowTitle("Passwort ändern")
     dialog.setWindowIcon(get_app_icon())
     dialog.setMinimumSize(560, 440)
@@ -46,11 +47,11 @@ def change_container_password(container_path: str, current_master_key: bytes, cu
     dialog.setModal(True)
     
     layout = QVBoxLayout(dialog)
-    layout.setContentsMargins(24, 24, 24, 24)
-    layout.setSpacing(16)
+    layout.setContentsMargins(30, 26, 30, 24)
+    layout.setSpacing(18)
     
     title_label = QLabel("Passwort für den geöffneten Tresor ändern")
-    title_label.setStyleSheet("font-size: 18px; font-weight: 700;")
+    title_label.setObjectName("DialogTitle")
     layout.addWidget(title_label)
 
     info_label = QLabel(
@@ -211,12 +212,16 @@ def get_password_with_requirements(parent, title="Passwort eingeben") -> tuple[s
     Returns (password, was_cancelled)
     """
     dialog = QDialog(parent)
+    dialog.setObjectName("SecurityDialog")
     dialog.setWindowTitle(title)
     dialog.setWindowIcon(get_app_icon())
-    dialog.setMinimumSize(420, 320)
+    dialog.setMinimumSize(500, 360)
+    dialog.resize(560, 400)
     dialog.setModal(True)
     
     layout = QVBoxLayout(dialog)
+    layout.setContentsMargins(30, 26, 30, 24)
+    layout.setSpacing(18)
     
     # Password input
     pwd_layout = QHBoxLayout()
@@ -225,6 +230,9 @@ def get_password_with_requirements(parent, title="Passwort eingeben") -> tuple[s
     pwd_input = QLineEdit()
     pwd_input.setEchoMode(QLineEdit.EchoMode.Password)
     pwd_input.setMinimumWidth(300)
+    pwd_input.setSizePolicy(
+        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+    )
     pwd_layout.addWidget(pwd_label)
     pwd_layout.addWidget(pwd_input)
     layout.addLayout(pwd_layout)

@@ -21,9 +21,10 @@ class SetupDialog(QDialog):
     def __init__(self):
         super().__init__()
 
+        self.setObjectName("SetupDialog")
         self.setWindowTitle(f"ANCORATE {edition} – Einrichtung")
         self.setWindowIcon(get_app_icon())
-        self.resize(520, 260)
+        self.resize(560, 340)
 
         layout = QVBoxLayout(self)
 
@@ -34,6 +35,7 @@ class SetupDialog(QDialog):
 Ein lokaler PC‑Key wird nun erzeugt
 und dauerhaft an dieses Gerät gebunden."""
         )
+        lbl.setObjectName("DialogIntro")
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
 
@@ -73,9 +75,10 @@ class LoginDialog(QDialog):
     def __init__(self):
         super().__init__()
 
+        self.setObjectName("AuthDialog")
         self.setWindowTitle(f"ANCORATE {edition} {version} – Anmeldung")
         self.setWindowIcon(get_app_icon())
-        self.resize(420, 170)
+        self.resize(520, 280)
 
         layout = QVBoxLayout(self)
 
@@ -85,6 +88,7 @@ class LoginDialog(QDialog):
             f"ANCORATE {edition} {version} ist © 2026\n"
             "by Samuel J. Tirwa & Gabriel Leiria‑Roussin"
         )
+        lbl.setObjectName("DialogIntro")
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
 
@@ -589,7 +593,7 @@ class OnboardingDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("Onboarding")
+        self.setObjectName("OnboardingDialog")
         self.setWindowTitle("ANCORATE – Erste Schritte")
         self.setWindowIcon(get_app_icon())
         self.setModal(True)
@@ -664,9 +668,10 @@ class OnboardingDialog(QDialog):
 class UpdateNewsDialog(QDialog):
     def __init__(self, parent: QWidget | None, update_data: dict):
         super().__init__(parent)
+        self.setObjectName("UpdateDialog")
         self.setWindowTitle("EncryptHome News")
         self.setWindowIcon(get_app_icon())
-        self.resize(640, 420)
+        self.resize(720, 500)
         self.setModal(True)
 
         version = update_data.get("version", "unbekannt")
@@ -677,7 +682,7 @@ class UpdateNewsDialog(QDialog):
         )
 
         headline = QLabel(f"Update verfügbar: Version {version}")
-        headline.setStyleSheet("font-weight: bold; font-size: 18px;")
+        headline.setObjectName("DialogTitle")
         headline.setWordWrap(True)
 
         details = QTextBrowser()
@@ -715,6 +720,8 @@ class UpdateNewsDialog(QDialog):
         actions.addWidget(open_updates_btn)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 26, 28, 24)
+        layout.setSpacing(16)
         layout.addWidget(headline)
         layout.addWidget(details, 1)
         layout.addLayout(actions)
@@ -732,8 +739,10 @@ class UpdateNewsDialog(QDialog):
 class DetailsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("DetailsDialog")
         self.setWindowTitle("ANCORATE – Technische Details")
-        self.setMinimumSize(560, 440)
+        self.setMinimumSize(640, 500)
+        self.resize(760, 600)
         self.setWindowIcon(get_app_icon())
         self.setWindowFlags(
             self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
@@ -753,7 +762,7 @@ class DetailsDialog(QDialog):
         prefix = QLabel("// ")
         prefix.setObjectName("SectionHeader")
         title = QLabel(f"TECHNISCHE DETAILS ZU ANCORATE {edition} {version}")
-        title.setStyleSheet("font-size: 14px; font-weight: bold; letter-spacing: 2px;")
+        title.setObjectName("DialogHeaderTitle")
 
         hlay.addWidget(prefix)
         hlay.addWidget(title)
@@ -866,8 +875,10 @@ class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        self.setObjectName("AboutDialog")
         self.setWindowTitle(f"Über ANCORATE {edition}")
-        self.setMinimumSize(480, 360)
+        self.setMinimumSize(680, 520)
+        self.resize(760, 620)
         self.setWindowIcon(get_app_icon())
         self.setWindowFlags(
             self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
@@ -885,17 +896,17 @@ class AboutDialog(QDialog):
         header = QWidget()
         header.setObjectName("HeaderBar")
         hlay = QHBoxLayout(header)
-        hlay.setContentsMargins(28, 22, 28, 22)
-        hlay.setSpacing(18)
+        hlay.setContentsMargins(36, 30, 36, 30)
+        hlay.setSpacing(24)
 
         # Icon
         icon_lbl = QLabel()
-        px = get_app_icon().pixmap(84, 84)
+        px = get_app_icon().pixmap(112, 112)
         if px.isNull():
-            px = QPixmap(94, 94)
+            px = QPixmap(122, 122)
             px.fill(QColor("#2f7cf6"))
         icon_lbl.setPixmap(px)
-        icon_lbl.setFixedSize(94, 94)
+        icon_lbl.setFixedSize(122, 122)
 
         # Name + Subtitle
         name_col = QVBoxLayout()
@@ -934,15 +945,15 @@ class AboutDialog(QDialog):
         scroll.setWidgetResizable(True)
         inner = QWidget()
         ilay = QVBoxLayout(inner)
-        ilay.setContentsMargins(24, 20, 24, 16)
-        ilay.setSpacing(14)
+        ilay.setContentsMargins(34, 28, 34, 24)
+        ilay.setSpacing(20)
 
         # ── Metadaten-Karte ───────────────────────────────────────────────
         card = QFrame()
         card.setObjectName("Card")
         clay = QVBoxLayout(card)
-        clay.setContentsMargins(18, 14, 18, 14)
-        clay.setSpacing(12)
+        clay.setContentsMargins(24, 20, 24, 20)
+        clay.setSpacing(16)
 
         # Sektion-Titel
         sec = QLabel("RELEASE-INFO")
@@ -951,9 +962,9 @@ class AboutDialog(QDialog):
         clay.addWidget(make_separator())
 
         meta = QGridLayout()
-        meta.setVerticalSpacing(9)
-        meta.setHorizontalSpacing(32)
-        meta.setColumnMinimumWidth(0, 130)
+        meta.setVerticalSpacing(12)
+        meta.setHorizontalSpacing(42)
+        meta.setColumnMinimumWidth(0, 150)
 
         rows = [
             ("Version", f"{version}  ({type_edition})"),
@@ -1008,7 +1019,7 @@ class AboutDialog(QDialog):
         footer = QWidget()
         footer.setObjectName("Footer")
         flay = QHBoxLayout(footer)
-        flay.setContentsMargins(24, 14, 24, 14)
+        flay.setContentsMargins(34, 18, 34, 18)
 
         copy_lbl = QLabel("© 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin")
         copy_lbl.setObjectName("Copyright")
@@ -1034,6 +1045,7 @@ class TermsOfServiceDialog(QDialog):
     def __init__(self):
         super().__init__()
 
+        self.setObjectName("TermsDialog")
         self.setWindowTitle("ANCORATE – Terms of Service")
         self.setWindowIcon(get_app_icon())
         self.setMinimumSize(760, 720)
@@ -1042,12 +1054,12 @@ class TermsOfServiceDialog(QDialog):
         # Styling wird zentral über die Theme-Dateien übernommen.
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(14)
+        layout.setContentsMargins(30, 26, 30, 24)
+        layout.setSpacing(16)
 
         header = QLabel("Terms of Service")
+        header.setObjectName("DialogTitle")
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setStyleSheet("font-size: 22px; font-weight: 600;")
         layout.addWidget(header)
 
         subtitle = QLabel(
@@ -1111,6 +1123,7 @@ class WelcomeOverlay(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        self.setObjectName("WelcomeDialog")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setModal(True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -1210,6 +1223,7 @@ class EditInVaultDialog(QDialog):
 
     def __init__(self, parent: QWidget | None, filename: str):
         super().__init__(parent)
+        self.setObjectName("EditDialog")
         self.setWindowTitle("ANCORATE – In-Tresor-Bearbeitung")
         self.setWindowIcon(get_app_icon())
         self.setModal(False)
@@ -1225,14 +1239,14 @@ class EditInVaultDialog(QDialog):
                 & ~Qt.WindowType.WindowMinimizeButtonHint
             )
         )
-        self.resize(360, 150)
+        self.resize(440, 220)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(10)
 
         title = QLabel("Datei wird bearbeitet")
-        title.setStyleSheet("font-weight: bold; font-size: 15px;")
+        title.setObjectName("DialogTitle")
         layout.addWidget(title)
 
         self._name_label = QLabel(filename)

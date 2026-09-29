@@ -416,36 +416,73 @@ QToolTip {
 }
 
 /* ------------------------------------------------------------
+   Dialog concepts
+   ------------------------------------------------------------ */
+QDialog#SetupDialog, QDialog#AuthDialog, QDialog#OnboardingDialog,
+QDialog#UpdateDialog, QDialog#DetailsDialog, QDialog#AboutDialog,
+QDialog#TermsDialog, QDialog#SecurityDialog, QDialog#SettingsDialog,
+QDialog#PreviewDialog, QDialog#EditDialog {
+    background-color: {{dialog-bg}};
+}
+QLabel#DialogTitle {
+    color: {{text}};
+    font-size: 22px;
+    font-weight: 700;
+}
+QLabel#DialogHeaderTitle {
+    color: {{text}};
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+QLabel#DialogIntro {
+    color: {{text-mid}};
+    font-size: 14px;
+}
+QDialog#SecurityDialog QGroupBox,
+QDialog#SettingsDialog QGroupBox {
+    background-color: {{surface}};
+    border-color: {{border-mid}};
+}
+QDialog#TermsDialog QTextEdit,
+QDialog#UpdateDialog QTextBrowser,
+QDialog#PreviewDialog QTextEdit {
+    background-color: {{surface-2}};
+    border-color: {{border-mid}};
+    padding: 14px;
+}
+
+/* ------------------------------------------------------------
    About-/Details-Dialog: benannte Labels
    ------------------------------------------------------------ */
 QLabel#AppName {
-    font-size: 22px;
+    font-size: 30px;
     font-weight: 700;
     color: {{text}};
-    letter-spacing: -0.5px;
+    letter-spacing: 0;
 }
 QLabel#AppSub {
-    font-size: 12px;
+    font-size: 14px;
     color: {{text-dim}};
     letter-spacing: 0.5px;
 }
 QLabel#SectionHeader {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     color: {{accent}};
     letter-spacing: 2px;
 }
 QLabel#MetaKey {
-    font-size: 12px;
+    font-size: 13px;
     color: {{text-dim}};
 }
 QLabel#MetaValue {
-    font-size: 12px;
+    font-size: 13px;
     color: {{text}};
     font-weight: 500;
 }
 QLabel#DescText {
-    font-size: 12px;
+    font-size: 14px;
     color: {{text-mid}};
 }
 QLabel#Copyright {
@@ -453,7 +490,7 @@ QLabel#Copyright {
     color: {{text-dim}};
 }
 QLabel#DetailLink {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     color: {{link}};
     text-decoration: underline;
