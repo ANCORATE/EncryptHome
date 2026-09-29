@@ -29,7 +29,7 @@ from app.main_window import App
 
 # In app.dialogs definierte Symbole fuer Re-Export bereitstellen
 from app.dialogs import (
-    SetupDialog, LoginDialog, VaultEntry, FileDropList,
+    SetupDialog, LoginDialog, VaultEntry, FileDropList, FileTree, FileGrid,
     UpdateNewsDialog, DetailsDialog, AboutDialog,
     TermsOfServiceDialog, WelcomeOverlay, OnboardingDialog,
 )

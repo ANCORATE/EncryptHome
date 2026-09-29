@@ -34,7 +34,7 @@ The current code implements:
 - file add, export and batch export
 - drag-and-drop file input
 - in-memory file preview with an LRU cache
-- configurable application settings and themes (Standard-dark / Standard-White, central app-wide styling)
+- configurable application settings and themes (Standard-dark / Standard-White / High-Contrast / Midnight Blue, central app-wide styling)
 - header validation and repair helpers
 - startup integrity/checksum verification
 - background update checking

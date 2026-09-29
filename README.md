@@ -30,7 +30,7 @@ EncryptHome provides a graphical vault application built with PyQt6. The current
 - Changing the password of an existing vault
 - Auto-lock behavior
 - Configurable keyboard shortcuts
-- Two Standard themes (Standard-dark / Standard-White) with central app-wide styling
+- Four built-in themes (Standard-dark / Standard-White / High-Contrast / Midnight Blue) with central app-wide styling
 - Application integrity and update checks
 - Update news and changelog display
 - A settings window with General, Shortcuts, Design, and Updates sections
@@ -204,16 +204,30 @@ The main window currently provides menu actions for:
 ### Edit
 
 - Add files
+- New folder
+- Move to folder
 - Start file preview
+- Edit file in vault
 - Delete selected files
 - Export selected files
 - Export all files
 
 ### Help
 
+- First steps (onboarding)
 - About EncryptHome
 
-The file list supports extended selection and accepts dropped local files. Double-clicking an entry starts its preview.
+The file list supports extended selection and accepts dropped local files. Files can be dragged between folders inside the vault (and dropped on empty space to move them back to the root). Double-clicking a file entry starts an in-vault edit session (see below); double-clicking a folder toggles it (tree) or opens it (grid).
+
+### Display layouts
+
+The layout can be switched instantly with the layout buttons in the toolbar (or via **Ansicht → Layout**):
+
+- **Liste** – folder tree with columns (Name, Größe, Geändert, Typ)
+- **Kompakt** – tree with name and size only
+- **Raster** – icon grid of the current folder (with a "Zurück" tile)
+
+The selection is stored in `settings.json` under `list_view_mode`. File types in the **Typ** column and in the preview are detected from the content's magic bytes first (via `utilities/file_types.py`) and only fall back to the file name/extension, so misleading extensions are not trusted.
 
 ---
 
@@ -226,6 +240,7 @@ The current code contains:
 - `AddWorker` for encrypting files into an existing vault
 - `ExportWorker` for exporting one file
 - `ExportBatchWorker` for exporting multiple files
+- `RewriteEntryWorker` for writing an edited file back into a vault
 - `StartupUpdateWorker` for background update checks
 
 The add worker supports progress reporting, cancellation through a `threading.Event`, and removal of source files after successful encryption when that setting is enabled.
@@ -288,14 +303,16 @@ The update system uses the configured update URL and can display release notes a
 
 ### Design & Themes
 
-EncryptHome ships two application themes:
+EncryptHome ships four application themes:
 
 - **Standard-dark** (`utilities/themes/standard-dark.css`)
 - **Standard-White** (`utilities/themes/standard-white.css`)
+- **High-Contrast** (`utilities/themes/high-contrast.css`)
+- **Midnight Blue** (`utilities/themes/midnight-blue.css`)
 
-Both files are structurally identical (same selectors, properties and widget object names) and differ only in their light/dark color palettes, so the two themes render every part of the application consistently. All application styling is centralized in these two Qt stylesheet files — dialogs, the settings window, password dialogs, About/Details/News dialogs and the welcome overlay use object names that these themes style, instead of per-widget hardcoded colors.
+All theme files share the same selectors, properties and widget object names and differ only in their color palettes, so every theme renders every part of the application consistently. All application styling is centralized in these Qt stylesheet files — dialogs, the settings window, password dialogs, About/Details/News dialogs and the welcome overlay use object names that these themes style, instead of per-widget hardcoded colors.
 
-The active theme is stored in `settings.json` under the `theme` key (values `Standard-dark` or `Standard-White`, default `Standard-dark`) and is applied on startup and when changed in the **Design** tab. Unknown or legacy theme values from older versions are automatically normalized to `Standard-dark`.
+The active theme is stored in `settings.json` under the `theme` key (default `Standard-dark`) and is applied on startup and when changed in the **Design** tab. Unknown or legacy theme values from older versions are automatically normalized to `Standard-dark`.
 
 ---
 
@@ -329,12 +346,17 @@ EncryptHome/
 │   ├── passwords.py
 │   ├── workers.py
 │   ├── dialogs.py
-│   └── main_window.py
+│   ├── main_window.py
+│   └── power_lock.py
 ├── utilities/
 │   ├── settings.py
+│   ├── theme_engine.py
+│   ├── container_ops.py
+│   ├── file_types.py
 │   ├── header_utils.py
 │   ├── checksum_check.py
 │   ├── updater.py
+│   ├── screenshot_protection.py
 │   ├── sos_delete.py
 │   └── themes/
 ├── docs/

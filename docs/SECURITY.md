@@ -337,7 +337,7 @@ If failure: Show a password/device error
 ```
 
 #### Attempt Limiting
-- **Maximum Attempts**: Not enforced by the application (the `MAX_ATTEMPTS` constant exists but no active lockout is wired); protection relies on strong Argon2id KDF parameters
+- **Maximum Attempts**: Not enforced by the application (no in-app attempt counter or lockout is wired); protection relies on strong Argon2id KDF parameters
 - **Purpose**: Offline brute-force resistance is provided by the expensive KDF rather than an in-app counter
 
 ### Device Authentication

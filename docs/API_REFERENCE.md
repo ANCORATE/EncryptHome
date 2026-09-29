@@ -9,6 +9,7 @@ Complete API reference for all EncryptHome modules, functions, and classes.
 - [decrypt_preview.py](#decrypt_previewpy)
 - [main.py](#mainpy)
 - [utilities/settings.py](#utilitiessettingspy)
+- [utilities/file_types.py](#utilitiesfile_typespy)
 - [utilities/header_utils.py](#utilitiesheader_utilspy)
 - [utilities/checksum_check.py](#utilitieschecksum_checkpy)
 - [utilities/sos_delete.py](#utilitiessos_deletepy)
@@ -233,7 +234,6 @@ In-memory file preview system for encrypted files.
 ```python
 PREVIEW_MAX_BYTES = 512 * 1024 * 1024  # 512 MiB max per file
 PREVIEW_TEXT_SHOW_BYTES = 128 * 1024 * 1024  # 128 MiB max text display
-PREVIEW_HEX_BYTES = 4096  # 4 KiB hex dump limit
 ```
 
 ### Classes
@@ -341,26 +341,6 @@ Guesses file type from extension.
 
 ---
 
-#### `_hexdump(data: bytes, max_bytes: int = PREVIEW_HEX_BYTES) -> str`
-
-Creates hex dump of binary data.
-
-**Parameters:**
-- `data` (bytes): Binary data to dump
-- `max_bytes` (int): Maximum bytes to process (default 4KB)
-
-**Returns:**
-- str: Formatted hex dump string
-
-**Format:**
-```
-0000: XX XX XX XX ... ASCII
-```
-
-**Purpose:** Fallback preview for unrecognized binary files
-
----
-
 ## main.py
 
 Main application module containing GUI and orchestration logic.
@@ -392,7 +372,7 @@ HKDF_LENGTH = 32
 
 ### Classes
 
-#### `App(QWidget)`
+#### `App(QMainWindow)`
 
 Main application window class.
 
@@ -408,8 +388,7 @@ App.__init__()
 - `flags` (int): Current container flags
 - `_preview_cache` (OrderedDict): LRU preview cache
 - `_preview_cache_limit` (int): Total cache limit (200 MB)
-- `MAX_ATTEMPTS` (int): Maximum login attempts (3)
-- `timeout_ms` (int): Auto-lock timeout (300000ms)
+- `_auto_lock_minutes` (int): Auto-lock timeout in minutes (0 = disabled)
 
 **Key Methods:**
 
@@ -464,15 +443,31 @@ Authentication dialog for vault access.
 
 ---
 
-#### `FileDropList(QListWidget)`
+#### `FileTree(QTreeWidget)`
 
-Custom file list widget with drag-and-drop support.
+Vault file list rendered as a tree with columns (`Name`, `Größe`, `Geändert`, `Typ`). Folders are real parent items, files are children. The metadata index (`int`) or `("folder", path)` tuple is stored in the `UserRole` of column 0. Files can be dragged onto folder rows or onto empty space (root); the view emits `itemsMoved` and the app updates the metadata.
 
-**Signal:**
-- `fileDropped(list[str])`: Emitted when files are dropped
+`FileDropList` is retained as a backwards-compatible alias of `FileTree`.
+
+**Signals:**
+- `fileDropped(list[str])`: Emitted when local files are dropped/pasted
+- `itemsMoved(list[int], object)`: Emitted on an internal drop; first argument is the dragged metadata indexes, second the drop-target role (folder tuple, file index, or `None` for empty space)
 
 **Methods:**
+- `make_item(role, columns, icon=None, bold=False) -> QTreeWidgetItem`: Build a row
+- `role(item)`: Read the stored metadata index/folder tuple
+- `drop_target_role(pos)`: Role under a viewport position (for drops)
+- `selected_roles() -> list`: Stored roles of all selected rows
 - `selected_file_paths() -> list[str]`: Get selected file paths
+- `set_overlay(widget)` / `_center_overlay(widget)`: Empty-state overlay support
+
+---
+
+#### `FileGrid(QListWidget)`
+
+Icon-grid view of the current folder (with a `("folder_up", parent)` tile). Same role conventions, drag&drop and `itemsMoved`/`fileDropped` signals as `FileTree`.
+
+**Methods:** `make_item(role, text, icon=None, bold=False)`, `role(item)`, `selected_roles()`, `drop_target_role(pos)`, `set_overlay(widget)`
 
 ---
 
@@ -695,7 +690,7 @@ DEFAULT_SETTINGS = {
 }
 ```
 
-**Theme handling:** Only two themes exist — `Standard-dark` (default) and `Standard-White` (`VALID_THEMES = ("Standard-dark", "Standard-White")`). During `load_settings()`, any legacy or unknown stored theme value is automatically migrated to `Standard-dark`. The mapping of theme name to stylesheet file lives in `app.core.THEMES`, with `DEFAULT_THEME = "Standard-dark"` as fallback. `app.core.APP_STYLE` holds the loaded stylesheet that is applied application-wide.
+**Theme handling:** Four themes exist — `Standard-dark` (default), `Standard-White`, `High-Contrast` and `Midnight Blue` (see `utilities.settings.VALID_THEMES`). During `load_settings()`, any legacy or unknown stored theme value is automatically migrated to `Standard-dark`. The mapping of theme name to stylesheet file lives in `utilities.theme_engine.THEME_FILES`, with `app.core.DEFAULT_THEME = "Standard-dark"` as fallback. `app.core.APP_STYLE` holds the loaded stylesheet that is applied application-wide.
 
 ### Classes
 
@@ -711,7 +706,7 @@ SettingsDialog.__init__(parent=None)
 **Tabs:**
 - General ("Allgemein"): System behavior, security/deletion method, maintenance
 - Shortcuts ("Kurzbefehle"): Keyboard shortcut configuration
-- Design: Theme and appearance (Standard-dark / Standard-White)
+- Design: Theme and appearance (Standard-dark / Standard-White / High-Contrast / Midnight Blue), file-list layout (list / compact / grid), sorting and columns
 - Updates: Changelog, update check and install
 
 **Methods:**
@@ -772,6 +767,26 @@ Saves application settings to file.
 **Error Handling:**
 - Prints error on failure
 - Does not raise exception
+
+---
+
+## utilities/file_types.py
+
+Content-based file type detection (Qt-independent). Used by the file-type column and the preview renderer selection.
+
+### Constants
+
+```python
+KIND_TEXT, KIND_IMAGE, KIND_PDF, KIND_VIDEO, KIND_BINARY
+TYPE_INFO = {"png": ("PNG-Bild", KIND_IMAGE), ...}
+```
+
+### Functions
+
+- `sniff_magic(data: bytes) -> str | None`: Detect a type key from the leading magic bytes (handles RIFF and ISO-BMFF containers, text heuristic).
+- `detect_type_key(filename: str, data: bytes | None = None) -> str | None`: Prefer content detection; fall back to the full extension chain (including `.tar.gz`).
+- `type_label(filename, data=None) -> str`: Human-readable label, e.g. `"PNG-Bild"` or `"Unbekannt"`.
+- `guess_kind(filename, data=None) -> str`: Preview category (`text`/`image`/`pdf`/`video`/`binary`).
 
 ---
 

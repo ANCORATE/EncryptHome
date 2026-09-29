@@ -6,31 +6,11 @@
 
 import os
 import sys
-import json
-import struct
-import time
-import hashlib
-import subprocess
-import socket
 import platform
-import requests
-from collections import OrderedDict
-from pathlib import Path
-from typing import Optional
+
 from PyQt6.QtCore import *
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
-from argon2.low_level import Type, hash_secret_raw
-
-# Interne Module
-from decrypt import *
-from decrypt_preview import PREVIEW_MAX_BYTES, PreviewDecryptWorker, show_preview
-from encrypt import *
-
-# Utilities
-from utilities.checksum_check import *
-from utilities.header_utils import *
-from utilities.settings import *
 
 from app.core import *
 # ============================================================
@@ -175,74 +155,131 @@ class VaultEntry:
         self.length = length
 
 
-class FileDropList(QListWidget):
+def _paths_from_mime(md) -> list:
+    """Lokale Dateipfade aus einer MimeData (Drag&Drop / Zwischenablage)."""
+    paths = []
+    try:
+        if md and md.hasUrls():
+            for url in md.urls():
+                path = url.toLocalFile()
+                if path and os.path.isfile(path):
+                    paths.append(path)
+    except Exception:
+        pass
+    return paths
+
+
+def _clipboard_file_paths() -> list:
+    try:
+        return _paths_from_mime(QGuiApplication.clipboard().mimeData())
+    except Exception:
+        return []
+
+
+class FileTree(QTreeWidget):
+    """Dateiliste des Tresors als Baum mit Spalten (Name/Größe/Geändert/Typ).
+
+    Ordner und Dateien werden als echte Hierarchie aufgebaut; die Zuordnung
+    zum Metadaten-Index (bzw. ("folder", pfad)) steckt in der UserRole der
+    Namensspalte. Dateien können innerhalb des Tresors per Drag&Drop in
+    Ordner verschoben werden (Signal ``itemsMoved``).
+    """
+
     fileDropped = pyqtSignal(list)
+    itemsMoved = pyqtSignal(list, object)  # (meta-Indizes, Ziel-Rolle)
+
+    COL_NAME, COL_SIZE, COL_DATE, COL_TYPE = range(4)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setColumnCount(4)
+        self.setHeaderLabels(["Name", "Größe", "Geändert", "Typ"])
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setRootIsDecorated(True)
+        self.setUniformRowHeights(True)
+        self.setAlternatingRowColors(True)
+        self.setExpandsOnDoubleClick(False)
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.setDropIndicatorShown(True)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.header().setStretchLastSection(False)
+        self.setColumnWidth(self.COL_SIZE, 90)
+        self.setColumnWidth(self.COL_DATE, 150)
+        self.setColumnWidth(self.COL_TYPE, 80)
+        self.header().setSectionResizeMode(
+            self.COL_NAME, QHeaderView.ResizeMode.Stretch
+        )
 
+    # ---- Helfer zum Aufbau der Baumzeilen ----
+    def make_item(self, role, columns, icon=None, bold=False):
+        item = QTreeWidgetItem([str(c) for c in columns])
+        item.setData(self.COL_NAME, Qt.ItemDataRole.UserRole, role)
+        if icon is not None and not icon.isNull():
+            item.setIcon(self.COL_NAME, icon)
+        if bold:
+            font = QFont(item.font(self.COL_NAME))
+            font.setBold(True)
+            item.setFont(self.COL_NAME, font)
+        return item
+
+    def role(self, item):
+        return item.data(self.COL_NAME, Qt.ItemDataRole.UserRole) if item else None
+
+    def count(self) -> int:
+        """Kompatibilität mit der früheren QListWidget-API (Top-Level-Einträge)."""
+        return self.topLevelItemCount()
+
+    def selected_roles(self):
+        return [self.role(it) for it in self.selectedItems()]
+
+    def drop_target_role(self, pos):
+        item = self.itemAt(pos)
+        return self.role(item) if item is not None else None
+
+    # ---- Ziehen & Ablegen (lokale Dateien + Verschieben im Tresor) ----
     def dragEnterEvent(self, event):
-        md = event.mimeData()
-        if md.hasUrls() or event.source() is self:
+        if event.mimeData().hasUrls() or event.source() is self:
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event):
-        md = event.mimeData()
-        if md.hasUrls() or event.source() is self:
+        if event.mimeData().hasUrls() or event.source() is self:
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event):
-        if self.isEnabled():
-            md = event.mimeData()
-            if md.hasUrls():
-                paths = []
-                for url in md.urls():
-                    path = url.toLocalFile()
-                    if path:
-                        if os.path.isfile(path):
-                            self._add_path_item(path)
-                            paths.append(path)
-                if paths:
-                    self.fileDropped.emit(paths)
-                event.acceptProposedAction()
-                return
-            super().dropEvent(event)
+        if not self.isEnabled():
+            event.ignore()
+            return
+        paths = _paths_from_mime(event.mimeData())
+        if paths:
+            self.fileDropped.emit(paths)
+            event.acceptProposedAction()
+            return
+        if event.source() is self:
+            roles = [r for r in self.selected_roles() if isinstance(r, int)]
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            target = self.drop_target_role(pos)
+            if roles:
+                self.itemsMoved.emit(roles, target)
+            event.acceptProposedAction()
+            return
+        event.ignore()
 
     def add_vault_entry(self, entry: VaultEntry):
-        item = QListWidgetItem(entry.name)
-        item.setData(Qt.ItemDataRole.UserRole, entry)
-        self.addItem(item)
+        item = self.make_item(entry, (entry.name, "", "", ""))
+        self.addTopLevelItem(item)
 
     def selected_entries(self):
-        entries = []
-        for item in self.selectedItems():
-            entry = item.data(Qt.ItemDataRole.UserRole)
-            if entry:
-                entries.append(entry)
-        return entries
-
-    def _add_path_item(self, path: str):
-        name = os.path.basename(path)
-        item = QListWidgetItem(name)
-        item.setData(Qt.ItemDataRole.UserRole, path)
-        self.addItem(item)
+        return [it for it in self.selected_roles() if isinstance(it, VaultEntry)]
 
     def selected_file_paths(self) -> list:
-        paths = []
-        for it in self.selectedItems():
-            p = it.data(Qt.ItemDataRole.UserRole)
-            if p:
-                paths.append(p)
-        return paths
+        return [it for it in self.selected_roles() if isinstance(it, str)]
 
     def keyPressEvent(self, event):
         # Strg+V: Dateien aus der Zwischenablage einfügen (kopierte Dateien)
@@ -251,27 +288,12 @@ class FileDropList(QListWidget):
             and event.key() == Qt.Key.Key_V
             and bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
         ):
-            if self._paste_clipboard_files():
+            paths = _clipboard_file_paths()
+            if paths:
+                self.fileDropped.emit(paths)
                 event.accept()
                 return
         super().keyPressEvent(event)
-
-    def _paste_clipboard_files(self) -> bool:
-        try:
-            md = QGuiApplication.clipboard().mimeData()
-        except Exception:
-            return False
-        if not md or not md.hasUrls():
-            return False
-        paths = []
-        for url in md.urls():
-            path = url.toLocalFile()
-            if path and os.path.isfile(path):
-                paths.append(path)
-        if not paths:
-            return False
-        self.fileDropped.emit(paths)
-        return True
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -286,6 +308,119 @@ class FileDropList(QListWidget):
         x = max(0, (self.width() - ov.width()) // 2)
         y = max(0, (self.height() - ov.height()) // 2)
         ov.move(x, y)
+
+
+class FileGrid(QListWidget):
+    """Raster-/Kachelansicht des aktuellen Ordners.
+
+    Zeigt Ordner und Dateien als Kacheln; Dateien können per Drag&Drop auf
+    Ordnerkacheln oder in den leeren Bereich (Wurzel) verschoben werden.
+    """
+
+    fileDropped = pyqtSignal(list)
+    itemsMoved = pyqtSignal(list, object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setViewMode(QListView.ViewMode.IconMode)
+        self.setIconSize(QSize(44, 44))
+        self.setGridSize(QSize(140, 96))
+        self.setResizeMode(QListView.ResizeMode.Adjust)
+        self.setWrapping(True)
+        self.setSpacing(10)
+        self.setUniformItemSizes(True)
+        self.setMovement(QListView.Movement.Static)
+        self.setWordWrap(True)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setAcceptDrops(True)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.setDropIndicatorShown(True)
+
+    def make_item(self, role, text, icon=None, bold=False):
+        item = QListWidgetItem(str(text))
+        item.setData(Qt.ItemDataRole.UserRole, role)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
+        if icon is not None and not icon.isNull():
+            item.setIcon(icon)
+        if bold:
+            font = QFont(item.font())
+            font.setBold(True)
+            item.setFont(font)
+        return item
+
+    def role(self, item):
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def selected_roles(self):
+        return [self.role(it) for it in self.selectedItems()]
+
+    def drop_target_role(self, pos):
+        item = self.itemAt(pos)
+        return self.role(item) if item is not None else None
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls() or event.source() is self:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls() or event.source() is self:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if not self.isEnabled():
+            event.ignore()
+            return
+        paths = _paths_from_mime(event.mimeData())
+        if paths:
+            self.fileDropped.emit(paths)
+            event.acceptProposedAction()
+            return
+        if event.source() is self:
+            roles = [r for r in self.selected_roles() if isinstance(r, int)]
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            target = self.drop_target_role(pos)
+            if roles:
+                self.itemsMoved.emit(roles, target)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def keyPressEvent(self, event):
+        if (
+            self.isEnabled()
+            and event.key() == Qt.Key.Key_V
+            and bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        ):
+            paths = _clipboard_file_paths()
+            if paths:
+                self.fileDropped.emit(paths)
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        ov = getattr(self, "_overlay", None)
+        if ov is not None and ov.isVisible():
+            self._center_overlay(ov)
+
+    def set_overlay(self, widget):
+        self._overlay = widget
+
+    def _center_overlay(self, ov):
+        x = max(0, (self.width() - ov.width()) // 2)
+        y = max(0, (self.height() - ov.height()) // 2)
+        ov.move(x, y)
+
+
+# Kompatibilitäts-Alias: frühere, flache Listenklasse.
+FileDropList = FileTree
 
 
 class Toast(QFrame):
@@ -448,8 +583,8 @@ class OnboardingDialog(QDialog):
         self.setWindowTitle("ANCORATE – Erste Schritte")
         self.setWindowIcon(get_app_icon())
         self.setModal(True)
-        self.setMinimumWidth(560)
-        self.resize(560, 460)
+        self.setMinimumWidth(920)
+        self.resize(900, 460)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(26, 22, 26, 18)
@@ -588,7 +723,7 @@ class DetailsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("ANCORATE – Technische Details")
-        self.setFixedSize(600, 520)
+        self.setMinimumSize(560, 440)
         self.setWindowIcon(get_app_icon())
         self.setWindowFlags(
             self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
@@ -722,7 +857,7 @@ class AboutDialog(QDialog):
         super().__init__(parent)
 
         self.setWindowTitle(f"Über ANCORATE {edition}")
-        self.setFixedSize(520, 400)
+        self.setMinimumSize(480, 360)
         self.setWindowIcon(get_app_icon())
         self.setWindowFlags(
             self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
@@ -958,7 +1093,7 @@ class WelcomeOverlay(QDialog):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setModal(True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(900, 420)
+        self.setMinimumSize(640, 320)
 
         # =========================
         # Layout
@@ -1075,7 +1210,7 @@ class EditInVaultDialog(QDialog):
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(10)
 
-        title = QLabel(f"Datei wird bearbeitet")
+        title = QLabel("Datei wird bearbeitet")
         title.setStyleSheet("font-weight: bold; font-size: 15px;")
         layout.addWidget(title)
 

@@ -21,7 +21,6 @@ from app.core import (
     HEADER_FMT,
     HEADER_LEN,
     MAGIC,
-    META_LEN_SIZE,
     VERSION,
     encrypt_meta,
     write_header,

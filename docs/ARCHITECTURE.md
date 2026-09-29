@@ -55,7 +55,7 @@ Screenshot protection is optional. On Windows it is installed for EncryptHome-ow
 
 ### `app/main_window.py`
 
-Contains `App(QWidget)`, the main application window and the main vault workflow. The class handles vault state, UI actions, file operations, preview caching, settings integration, update checks and LAN functionality.
+Contains `App(QMainWindow)`, the main application window and the main vault workflow. The window uses a native menu bar, a toolbar with the primary actions and the layout switch (Liste/Kompakt/Raster), and a vault header with a live search field above the file view. The file view is a `QStackedWidget` holding a columned folder tree (`FileTree`) and an icon grid (`FileGrid`); files can be moved between folders by drag&drop. The class handles vault state, UI actions, file operations, preview caching, settings integration, update checks and LAN functionality.
 
 ### `app/dialogs.py`
 
@@ -202,11 +202,15 @@ The implementation is authoritative for the exact binary layout. Changes to this
 
 ### `utilities/settings.py`
 
-Application settings, settings UI, shortcuts and theme configuration. Only two themes are available (`Standard-dark` / `Standard-White`), both defined centrally in `utilities/themes/standard-*.css` and applied app-wide; legacy theme values are migrated to `Standard-dark`.
+Application settings, settings UI, shortcuts and theme configuration. Four themes are available (`Standard-dark` / `Standard-White` / `High-Contrast` / `Midnight Blue`), all defined centrally in `utilities/themes/*.css` and applied app-wide; legacy theme values are migrated to `Standard-dark`.
 
 ### `utilities/container_ops.py`
 
 Qt-independent container operations: SHA-256 of plaintext, metadata-entry construction, and the atomic single-entry replacement used by in-vault editing. It rebuilds the container (header + blobs + meta) into a temporary file and replaces the original only on success.
+
+### `utilities/file_types.py`
+
+Content-based file type detection. Magic-byte signatures are checked first (PNG, JPEG, PDF, RIFF/WebP/AVI/WAV, ISO-BMFF/MP4, archives, …); only if the content is unknown does it fall back to the full extension chain (including compound suffixes such as `.tar.gz`). Used by the **Typ** column and by the preview to pick the right renderer. No Qt dependency.
 
 ### `utilities/header_utils.py`
 

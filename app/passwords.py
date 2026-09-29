@@ -4,34 +4,9 @@
 # (c) 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
 #
 
-import os
-import sys
-import json
-import struct
-import time
-import hashlib
-import subprocess
-import socket
-import platform
-import requests
-from collections import OrderedDict
-from pathlib import Path
-from typing import Optional
 from PyQt6.QtCore import *
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
-from argon2.low_level import Type, hash_secret_raw
-
-# Interne Module
-from decrypt import *
-from decrypt_preview import PREVIEW_MAX_BYTES, PreviewDecryptWorker, show_preview
-from encrypt import *
-
-# Utilities
-from utilities.checksum_check import *
-from utilities.header_utils import *
-from utilities.settings import *
-
 
 from app.core import *
 # ============================================================
@@ -238,7 +213,7 @@ def get_password_with_requirements(parent, title="Passwort eingeben") -> tuple[s
     dialog = QDialog(parent)
     dialog.setWindowTitle(title)
     dialog.setWindowIcon(get_app_icon())
-    dialog.setFixedSize(450, 350)
+    dialog.setMinimumSize(420, 320)
     dialog.setModal(True)
     
     layout = QVBoxLayout(dialog)

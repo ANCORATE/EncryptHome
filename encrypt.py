@@ -1,10 +1,15 @@
 # THIS CODE IS PROPERTY OF SAMUEL J. TIRWA & GABRIEL LEIRIA-ROUSSIN. NO PART OF THIS CODE MAY BE REPRODUCED, REUSED, MODIFIED, OR DISTRIBUTED WITHOUT THE EXPRESS PERMISSION OF THE AUTHORS. VIOLATORS WILL BE PROSECUTED TO THE FULLEST EXTENT OF THE LAW. COPYRIGHT 2025. ALL RIGHTS RESERVED.
-from base import *
-import os
 import json
+import os
 import secrets
 import threading
-from cryptography.hazmat.primitives import hmac, hashes
+
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from base import CHUNK, derive_subkey
 
 # AES-GCM encryption
 def encrypt_meta(meta: dict, master_key: bytes) -> bytes:

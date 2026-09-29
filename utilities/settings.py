@@ -18,12 +18,9 @@ from . import get_app_icon
 
 # --- Setup Pfade & Konstanten ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
 
-# VUpdater Import versuchen
 try:
-    from updater import EncryptHomeUpdater
+    from .updater import EncryptHomeUpdater
 except ImportError:
     EncryptHomeUpdater = None
 
@@ -65,7 +62,7 @@ DEFAULT_SETTINGS = {
     "ui_accent": "",  # leer = Theme-Standard, sonst Hex wie "#ff8800"
     "ui_density": "Mittel",  # Kompakt, Mittel, Komfortabel
     # --- Design: Dateilisten-Ansicht ---
-    "list_view_mode": "list",  # list, grid
+    "list_view_mode": "list",  # list, compact, grid
     "list_show_size": True,
     "list_show_date": True,
     "list_sort": "Keine",  # Keine, Name
@@ -85,7 +82,7 @@ DEFAULT_SETTINGS = {
 
 VALID_THEMES = ("Standard-dark", "Standard-White", "High-Contrast", "Midnight Blue")
 VALID_DENSITIES = ("Kompakt", "Mittel", "Komfortabel")
-VALID_LIST_VIEW_MODES = ("list", "grid")
+VALID_LIST_VIEW_MODES = ("list", "compact", "grid")
 VALID_LIST_SORTS = ("Keine", "Name")
 
 # Vordefinierte Akzentfarben für den Design-Tab. Leer = Theme-Standard.
@@ -163,7 +160,6 @@ def _stable_machine_id() -> bytes:
             return int(mac).to_bytes(6, "big", signed=False)
     except Exception:
         pass
-    import platform
     return hashlib.sha256(
         f"{platform.node()}|{platform.system()}".encode("utf-8")
     ).digest()
@@ -531,7 +527,7 @@ class ChangelogWorker(QThread):
 
     def run(self):
         try:
-            from updater import validate_latest_json
+            from .updater import validate_latest_json
 
             response = requests.get(UPDATE_URL, timeout=5)
             if response.status_code != 200:
@@ -550,7 +546,6 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"ANCORATE EncryptHome {VERSION_YEAR} – Einstellungen")
         self.setWindowIcon(get_app_icon())
-        self.resize(1100, 700)
         self.setMinimumSize(900, 500)  # Allow user to resize but not too small
         self.resize(1100, 700)
         self.data = load_settings()
@@ -769,7 +764,7 @@ class SettingsDialog(QDialog):
 
         # --- Footer: Systeminfo Button ---
         layout.addSpacing(10)
-        about_btn = QPushButton(f"Informationen zu dieser Installation von EncryptHome")
+        about_btn = QPushButton("Informationen zu dieser Installation von EncryptHome")
         about_btn.setMinimumHeight(35)
         about_btn.clicked.connect(self.show_about_dialog)
         layout.addWidget(about_btn)
@@ -797,14 +792,6 @@ class SettingsDialog(QDialog):
         )
         if reply == QMessageBox.StandardButton.Yes:
             sys.exit(0)
-
-    # Hilfsmethode für den Browse-Button
-    def browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(
-            self, "Zielordner wählen", self.path_input.text()
-        )
-        if folder:
-            self.path_input.setText(folder)
 
     def create_shortcuts_tab(self):
         widget = QWidget()
@@ -945,12 +932,15 @@ class SettingsDialog(QDialog):
             QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
         )
 
-        mode_lbl = QLabel("Darstellung:")
+        mode_lbl = QLabel("Layout:")
         self.list_mode_combo = QComboBox()
         self.list_mode_combo.addItem("Liste", "list")
+        self.list_mode_combo.addItem("Kompakt", "compact")
         self.list_mode_combo.addItem("Raster", "grid")
-        self.list_mode_combo.setCurrentIndex(
-            0 if self.data.get("list_view_mode", "list") == "list" else 1)
+        mode_index = self.list_mode_combo.findData(
+            self.data.get("list_view_mode", "list")
+        )
+        self.list_mode_combo.setCurrentIndex(max(0, mode_index))
         self.list_mode_combo.currentIndexChanged.connect(self._save_list_mode)
         form_list.addRow(mode_lbl, self.list_mode_combo)
 
@@ -1029,8 +1019,13 @@ class SettingsDialog(QDialog):
 
     def clear_temp_cache(self):
         try:
+            # Der Updater legt Downloads im Verzeichnis der Anwendung ab
+            # (analog zu EncryptHomeUpdater.update_dir); BASE_DIR bleibt als
+            # Legacy-Ort erhalten.
+            app_base = os.path.dirname(os.path.abspath(sys.argv[0]))
             temp_dirs = [
-                os.path.join(BASE_DIR, "update_temp"),  # heruntergeladene Updates
+                os.path.join(app_base, "update_temp"),  # heruntergeladene Updates
+                os.path.join(BASE_DIR, "update_temp"),  # Legacy-Ort
                 os.path.join(os.getcwd(), "cache"),  # App-Cache (falls vorhanden)
             ]
 
@@ -1090,7 +1085,7 @@ class SettingsDialog(QDialog):
         """Wird aufgerufen, wenn der Worker fehlschlägt."""
         if "errno 11001" in error_msg.lower():
             self.changelog_text.setText(
-                f"Fehler bei der Verbindung zum Update-Server (DNS-Resolve fehlgeschlagen).\nBitte prüfen Sie Ihre Internetverbindung."
+                "Fehler bei der Verbindung zum Update-Server (DNS-Resolve fehlgeschlagen).\nBitte prüfen Sie Ihre Internetverbindung."
             )
         else:
             self.changelog_text.setText(
@@ -1152,7 +1147,7 @@ class SettingsDialog(QDialog):
             )
             return
 
-        from updater import parse_version, UpdateCheckCache
+        from .updater import parse_version, UpdateCheckCache
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
@@ -1237,7 +1232,7 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, title, info_text)
 
         except Exception as e:
-            from updater import is_network_reachable
+            from .updater import is_network_reachable
 
             error_msg = str(e).lower()
             if isinstance(e, ConnectionError) or (
@@ -1400,7 +1395,7 @@ class SettingsDialog(QDialog):
         self._apply_theme_now()
 
     def _save_list_mode(self):
-        """Speichert Listen-/Raster-Modus sofort"""
+        """Speichert das Layout (Liste/Kompakt/Raster) sofort."""
         self.data["list_view_mode"] = str(
             self.list_mode_combo.currentData() or "list")
         save_settings(self.data)

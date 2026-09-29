@@ -20,7 +20,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QObject, Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QGuiApplication, QPixmap, QCloseEvent
+from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 )
 
 from base import derive_subkey
+from utilities.file_types import guess_kind
 
 # ----------------------------
 # Konfiguration / Limits
@@ -47,9 +48,6 @@ PREVIEW_MAX_BYTES = 512 * 1024 * 1024  # 512 MiB
 
 # Max. Bytes, die in der UI als text angezeigt werden.
 PREVIEW_TEXT_SHOW_BYTES = 128 * 1024 * 1024 # 128 MiB
-
-# Wie viele Bytes für Hexdump (fallback)
-PREVIEW_HEX_BYTES = 4096 # 4 KiB
 
 
 @dataclass(frozen=True)
@@ -241,60 +239,14 @@ def decrypt_entry_to_bytes(
     return data, info
 
 
-def _guess_kind(filename: str) -> str:
-    ext = os.path.splitext(filename.lower())[1]
-    if ext in {
-        ".txt",
-        ".log",
-        ".md",
-        ".py",
-        ".json",
-        ".csv",
-        ".xml",
-        ".yaml",
-        ".yml",
-        ".ini",
-        ".cfg",
-        ".java",
-    }:
-        return "text"
-    if ext in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}:
-        return "image"
-    if ext in {".pdf"}:
-        return "pdf"
-    if ext in {
-        ".mp4",
-        ".m4v",
-        ".mov",
-        ".avi",
-        ".mkv",
-        ".webm",
-        ".wmv",
-        ".mpg",
-        ".mpeg",
-        ".3gp",
-        ".3g2",
-        ".flv",
-    }:
-        return "video"
-    return "binary"
-
-
-def _hexdump(data: bytes, max_bytes: int = PREVIEW_HEX_BYTES) -> str:
-    view = data[: max(0, int(max_bytes))]
-    lines = []
-    for i in range(0, len(view), 16):
-        chunk = view[i : i + 16]
-        hexpart = " ".join(f"{b:02X}" for b in chunk)
-        asciipart = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
-        lines.append(f"{i:08X}  {hexpart:<47}  {asciipart}")
-    if len(data) > len(view):
-        lines.append(f"... ({len(data) - len(view)} Bytes nicht angezeigt)")
-    return "\n".join(lines)
+def _guess_kind(filename: str, data: bytes | None = None) -> str:
+    """Kategorie für die Vorschau; erkennt den echten Typ (Magic-Bytes)
+    und fällt nur ersatzweise auf die Dateiendung zurück."""
+    return guess_kind(filename, data)
 
 
 def _decode_text(data: bytes) -> tuple[str, str]:
-    # Erst UTF-8, dann Latin-1 als Fallback
+    # UTF-8; ungültige Bytes werden ersetzt, damit nie Text verloren geht.
     try:
         return data.decode("utf-8"), "utf-8"
     except Exception:
@@ -323,21 +275,10 @@ class PreviewDialog(QDialog):
 
         header = QLabel()
         header.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        size_text = (
-            f"{info.size / (1024**2):.2f} MB"
-            if info.size >= 1024**2
-            else f"{info.size} B"
-        )
-        loaded_text = (
-            f"{info.loaded_bytes / (1024**2):.2f} MB"
-            if info.loaded_bytes >= 1024**2
-            else f"{info.loaded_bytes} B"
-        )
-        trunc = " (abgeschnitten)" if info.truncated else ""
         header.setText(f"<b>{info.name}</b>")
         layout.addWidget(header)
 
-        kind = _guess_kind(filename)
+        kind = _guess_kind(filename, data)
         if kind == "image":
             self._build_image(layout, data)
         elif kind == "pdf":
@@ -607,7 +548,6 @@ class PreviewDialog(QDialog):
             self._video_buffer = buf
             self._video_position_slider = pos_slider
             self._video_time_label = time_label
-            print("finished building internal")
 
             return True
         except ImportError:
@@ -627,7 +567,6 @@ class PreviewDialog(QDialog):
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        print("finished building external")
         return False
 
     def _open_video_external(self, data: bytes, filename: str):
@@ -706,14 +645,6 @@ class PreviewDialog(QDialog):
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
         )
         layout.addWidget(label, 1)
-
-    def _copy_best(self, kind: str, data: bytes):
-        if kind == "text":
-            view = data[:PREVIEW_TEXT_SHOW_BYTES]
-            text, _ = _decode_text(view)
-            QGuiApplication.clipboard().setText(text)
-        else:
-            QGuiApplication.clipboard().setText(_hexdump(data))
 
     def closeEvent(self, a0):
         if self.player:

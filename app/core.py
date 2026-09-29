@@ -5,32 +5,28 @@
 #
 
 import os
-import sys
 import json
 import struct
 import time
 import hashlib
 import subprocess
-import platform
 import secrets
 import tempfile
-import requests
-from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
+
 from PyQt6.QtCore import *
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
 from argon2.low_level import Type, hash_secret_raw
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 # Interne Module
 from decrypt import *
-from decrypt_preview import PREVIEW_MAX_BYTES, PreviewDecryptWorker, show_preview
 from encrypt import *
 
 # Utilities
-from utilities.checksum_check import *
-from utilities.header_utils import *
 from utilities.settings import *
 from utilities.theme_engine import build_stylesheet
 from utilities import get_app_icon
@@ -59,8 +55,6 @@ HEADER_FMT = f"4s B B {SALT_LEN}s 6s"  # Magic, Version, Flags, Salt, Reserved (
 HEADER_LEN = struct.calcsize(HEADER_FMT)  # 4 + 1 + 1 + 16 + 6 = 28 Bytes
 HKDF_INFO = b"ANCORATE-MASTER-26"  # Info für HKDF
 HKDF_LENGTH = 32  # 32 Bytes -> AES-256
-LICENSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "licenses.dat")
-CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".ancorate")
 
 
 if os.name == "nt":
@@ -88,18 +82,6 @@ version = "27 Beta 1"  # aktuelle Version der Software, wird in gui angezeigt
 version_year = "27"
 edition = "EncryptHome"  # Edition der Software
 type_edition = "Capsule"
-
-# Prüfe und aktualisiere Checksummen der Systemdateien
-# verify_file_integrity(f"ANCORATE_{edition}_26.2_Build_0009.exe", update=True)
-
-
-def read_json_file(path):
-    """Hilfsfunktion: Liest JSON ein"""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
 
 
 def safe_run(cmd, timeout=1):
@@ -405,28 +387,6 @@ def load_device_key() -> bytes:
         print(f"[ERROR] Device key generation failed: {e}")
         # Fallback to empty bytes if fingerprint generation fails
         return b""
-
-
-def load_device_key_candidates() -> list:
-    """
-    Liefert alle plausiblen Geräteschlüssel dieser Maschine.
-
-    Kandidat 0 ist der neue, deterministische Schlüssel. Weitere Kandidaten
-    sind die reproduzierbaren Varianten der früheren, zeitabhängigen
-    Ableitung, damit Tresore aus älteren Versionen weiterhin geöffnet werden
-    können. Reihenfolge deterministisch, ohne Duplikate.
-    """
-    candidates = []
-    try:
-        stable = load_device_key()
-        if stable:
-            candidates.append(stable)
-    except Exception as e:
-        print(f"[WARN] Stable device key unavailable: {e}")
-    for variant in legacy_device_key_variants():
-        if variant and variant not in candidates:
-            candidates.append(variant)
-    return candidates
 
 
 def determine_master_key(pwd, salt, flags, meta_blob):
@@ -787,37 +747,34 @@ def derive_master_key(
     device_bound: bool = False,
     device_key: Optional[bytes] = None,
 ) -> bytes:
-    try:
-        if not isinstance(password, str):
-            raise TypeError("password muss str sein.")
-        if not isinstance(salt, bytes) or len(salt) != 16:
-            raise ValueError("salt muss 16 Bytes lang sein.")
-        if device_bound and (device_key is None):
-            raise ValueError("device_bound=True verlangt device_key")
+    if not isinstance(password, str):
+        raise TypeError("password muss str sein.")
+    if not isinstance(salt, bytes) or len(salt) != 16:
+        raise ValueError("salt muss 16 Bytes lang sein.")
+    if device_bound and (device_key is None):
+        raise ValueError("device_bound=True verlangt device_key")
 
-        # Validate device key if device bound
-        if device_bound and device_key:
-            if len(device_key) != 32:
-                raise ValueError(f"Invalid device key length: {len(device_key)}")
+    # Validate device key if device bound
+    if device_bound and device_key:
+        if len(device_key) != 32:
+            raise ValueError(f"Invalid device key length: {len(device_key)}")
 
-        # Passwort + Pepper → Argon2
-        pwd_bytes = password.encode("utf-8") + PROJECT_PEPPER
-        pwd_key = derive_argon2(pwd_bytes, salt)  # 32 Bytes
+    # Passwort + Pepper → Argon2
+    pwd_bytes = password.encode("utf-8") + PROJECT_PEPPER
+    pwd_key = derive_argon2(pwd_bytes, salt)  # 32 Bytes
 
-        # Device-Binding sicher per Hash (32 Bytes)
-        device_hash = hashlib.sha256(device_key).digest() if device_key else b""
+    # Device-Binding sicher per Hash (32 Bytes)
+    device_hash = hashlib.sha256(device_key).digest() if device_key else b""
 
-        # Kombinieren als Input für HKDF (variabel lang)
-        ikm = pwd_key + device_hash
+    # Kombinieren als Input für HKDF (variabel lang)
+    ikm = pwd_key + device_hash
 
-        # HKDF erzwingt exakt 32 Bytes → AES-256 kompatibel
-        master = HKDF(
-            algorithm=hashes.SHA256(), length=HKDF_LENGTH, salt=salt, info=HKDF_INFO
-        ).derive(ikm)
+    # HKDF erzwingt exakt 32 Bytes → AES-256 kompatibel
+    master = HKDF(
+        algorithm=hashes.SHA256(), length=HKDF_LENGTH, salt=salt, info=HKDF_INFO
+    ).derive(ikm)
 
-        return master
-    except Exception as e:
-        raise
+    return master
 
 
 def validate_password_strength(password: str) -> tuple[bool, str]:
@@ -883,7 +840,7 @@ def read_header(fh):
     Liest den Header eines geöffneten Containers.
 
     fh muss im Read/Write-Modus geöffnet sein.
-    Gibt die Felder zurück: (version, flags, salt)
+    Gibt die Felder zurück: (flags, salt)
 
     WICHTIG: Diese Funktion verändert die Datei NICHT. Eine Header-Reparatur
     würde das Salt ändern und den Tresor dauerhaft unlesbar machen, weil die
@@ -942,22 +899,6 @@ def make_separator(color=None):
     if color:
         line.setStyleSheet(f"background-color: {color}; border: none;")
     return line
-
-def load_theme_setting():
-    try:
-        return load_settings().get("theme", "Standard-dark")
-    except Exception:
-        return "Standard-dark"
-
-# ---------------------------------------------------------
-# Base Path (EXE-Verzeichnis)
-# ---------------------------------------------------------
-base_path = os.path.dirname(os.path.abspath(sys.argv[0]))
-
-# ---------------------------------------------------------
-# Theme auswählen
-# ---------------------------------------------------------
-theme = load_theme_setting()
 
 DEFAULT_THEME = "Standard-dark"
 

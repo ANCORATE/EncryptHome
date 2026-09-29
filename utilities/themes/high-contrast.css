@@ -257,6 +257,93 @@ QListWidget::item:selected {
 }
 
 /* ------------------------------------------------------------
+   Werkzeugleiste & Dateibaum
+   ------------------------------------------------------------ */
+QToolBar {
+    background-color: {{surface}};
+    border-bottom: 1px solid {{border-mid}};
+    padding: 4px 8px;
+    spacing: 6px;
+}
+QToolBar QToolButton {
+    color: {{text}};
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+QToolBar QToolButton:hover {
+    background-color: {{surface-hover}};
+    border-color: {{border-soft}};
+}
+QToolBar QToolButton:pressed {
+    background-color: {{surface-pressed}};
+}
+QTreeWidget {
+    background-color: {{surface-2}};
+    border: 1px solid {{border-soft}};
+    border-radius: 10px;
+    color: {{text}};
+    selection-background-color: {{accent-focus}};
+    selection-color: {{on-accent}};
+}
+QTreeWidget::item {
+    padding: 6px 6px;
+    color: {{text}};
+}
+QTreeWidget::item:hover {
+    background-color: {{item-hover}};
+}
+QTreeWidget::item:selected {
+    background-color: {{accent-soft}};
+    color: {{on-soft}};
+}
+QHeaderView::section {
+    background-color: {{surface}};
+    color: {{text-dim}};
+    border: none;
+    border-right: 1px solid {{border-soft}};
+    border-bottom: 1px solid {{border-mid}};
+    padding: 6px 8px;
+    font-weight: 600;
+}
+
+/* ------------------------------------------------------------
+   Kopfzeile & Statusleiste
+   ------------------------------------------------------------ */
+QFrame#VaultHeader {
+    background-color: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: 12px;
+}
+QLabel#VaultName {
+    color: {{text}};
+    font-size: 15px;
+    font-weight: 700;
+}
+QLabel#VaultMeta {
+    color: {{text-dim}};
+    font-size: 11px;
+}
+QLabel#VaultHeaderIcon {
+    background-color: {{surface-2}};
+    border: 1px solid {{border-soft}};
+    border-radius: 10px;
+}
+QLabel#VaultHeaderIcon[hasVault="true"] {
+    background-color: {{accent-soft}};
+    border-color: {{accent}};
+}
+QStatusBar {
+    background-color: {{surface}};
+    color: {{text-dim}};
+    border-top: 1px solid {{border-mid}};
+}
+QStatusBar::item {
+    border: none;
+}
+
+/* ------------------------------------------------------------
    Dialoge & Frames
    ------------------------------------------------------------ */
 QDialog, QProgressDialog {

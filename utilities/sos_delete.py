@@ -125,7 +125,7 @@ class SaltScannerUI(QWidget):
                 # Update UI from main thread
                 QTimer.singleShot(0, self._scan_complete)
             except Exception as e:
-                QTimer.singleShot(0, lambda: self._scan_error(str(e)))
+                QTimer.singleShot(0, lambda err=str(e): self._scan_error(err))
             finally:
                 self._scanning = False
         

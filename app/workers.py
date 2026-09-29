@@ -5,38 +5,29 @@
 #
 
 import os
-import sys
-import json
 import struct
 import time
-import hashlib
-import subprocess
-import socket
-import platform
 import secrets
-import requests
-from collections import OrderedDict
-from pathlib import Path
+import tempfile
+import threading
 from typing import Optional
+
+import requests
 from PyQt6.QtCore import *
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
-from argon2.low_level import Type, hash_secret_raw
 
 # Interne Module
 from decrypt import *
-from decrypt_preview import PREVIEW_MAX_BYTES, PreviewDecryptWorker, show_preview
 from encrypt import *
 
 # Utilities
-from utilities.checksum_check import *
 from utilities.container_ops import (
     file_sha256,
     new_file_entry,
     replace_entry_in_container,
     touch_container_meta,
 )
-from utilities.header_utils import *
 from utilities.settings import *
 
 from app.core import *
@@ -87,6 +78,109 @@ def _secure_delete_plaintext(path: str, method: str):
         os.remove(path)
     except Exception:
         pass
+
+
+class DeleteWorker(QObject):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(str, object)
+    error = pyqtSignal(str)
+
+    def __init__(self, container_path, meta, entry_index, master_key, method, stop_event):
+        super().__init__()
+        self.container_path = container_path
+        self.meta = meta
+        self.entry_index = int(entry_index)
+        self.master_key = master_key
+        self.method = method
+        self.stop_event = stop_event
+
+    def _secure_overwrite(self, file_handle, offset, length):
+        passes = _deletion_passes(self.method)
+        total_work = max(1, length * passes)
+        total_written = 0
+        chunk_size = 1024 * 1024
+
+        for _ in range(passes):
+            if self.stop_event.is_set():
+                raise RuntimeError("Vorgang abgebrochen")
+            file_handle.seek(offset)
+            bytes_left = length
+            while bytes_left > 0:
+                if self.stop_event.is_set():
+                    raise RuntimeError("Vorgang abgebrochen")
+                current_chunk = min(bytes_left, chunk_size)
+                file_handle.write(secrets.token_bytes(current_chunk))
+                bytes_left -= current_chunk
+                total_written += current_chunk
+                self.progress.emit(min(100, int(total_written / total_work * 100)))
+            file_handle.flush()
+            os.fsync(file_handle.fileno())
+
+    def run(self):
+        temp_path = None
+        try:
+            target = self.meta["files"][self.entry_index]
+            offset = int(target["offset"])
+            length = int(target["length"])
+            name = target["name"]
+            container_dir = os.path.dirname(os.path.abspath(self.container_path)) or os.curdir
+
+            with open(self.container_path, "rb+") as handle:
+                self._secure_overwrite(handle, offset, length)
+
+            with tempfile.NamedTemporaryFile(delete=False, dir=container_dir) as temp:
+                temp_path = temp.name
+
+            with open(self.container_path, "rb") as source:
+                header = source.read(HEADER_LEN)
+                with open(temp_path, "wb") as destination:
+                    destination.write(header)
+                    remaining = offset - HEADER_LEN
+                    while remaining > 0:
+                        if self.stop_event.is_set():
+                            raise RuntimeError("Vorgang abgebrochen")
+                        chunk = source.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise IOError("Unexpected EOF before deleted region")
+                        destination.write(chunk)
+                        remaining -= len(chunk)
+
+                    source.seek(offset + length)
+                    data_end = os.path.getsize(self.container_path) - META_LEN_SIZE
+                    after_deleted = data_end - (offset + length)
+                    while after_deleted > 0:
+                        if self.stop_event.is_set():
+                            raise RuntimeError("Vorgang abgebrochen")
+                        chunk = source.read(min(1024 * 1024, after_deleted))
+                        if not chunk:
+                            raise IOError("Unexpected EOF after deleted region")
+                        destination.write(chunk)
+                        after_deleted -= len(chunk)
+
+                new_meta = {**self.meta, "files": [dict(item) for item in self.meta["files"]]}
+                new_meta["files"].pop(self.entry_index)
+                for item in new_meta["files"]:
+                    if item["offset"] > offset:
+                        item["offset"] -= length
+
+                new_meta_blob = encrypt_meta(new_meta, self.master_key)
+                with open(temp_path, "ab") as destination:
+                    destination.write(new_meta_blob)
+                    destination.write(struct.pack("<Q", len(new_meta_blob)))
+
+            if self.stop_event.is_set():
+                raise RuntimeError("Vorgang abgebrochen")
+            os.replace(temp_path, self.container_path)
+            temp_path = None
+            self.finished.emit(name, new_meta)
+        except Exception as error:
+            self.error.emit(str(error) or repr(error))
+        finally:
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
 
 
@@ -240,7 +334,7 @@ class AddWorker(QObject):
                         pass
                     raise
 
- # Einstellungen neu laden für aktuellen del_source_added Status
+            # Einstellungen neu laden für aktuellen del_source_added Status
             current_settings = load_settings()
             if current_settings.get("del_source_added"):
                 # Nur die tatsächlich erfolgreich verschlüsselten Quelldateien
@@ -279,37 +373,12 @@ class ExportWorker(QObject):
 
     def run(self):
         try:
-            # Container-Datei prüfen
-            container_file = os.path.normpath(self.container_path)
-            if not os.path.isfile(container_file):
-                raise FileNotFoundError(
-                    f"Container-Datei existiert nicht: {container_file}"
-                )
-
-            # Zielpfad für exportierte Datei
-            save_to_raw = self.meta_entry.get("__save_to")
-            if not save_to_raw:
-                raise ValueError("Kein Zielpfad angegeben")
-            save_to = os.path.normpath(save_to_raw)
-
-            # Zielordner erstellen, falls nicht existiert
-            save_dir = os.path.dirname(save_to)
-            if save_dir:
-                os.makedirs(save_dir, exist_ok=True)
-
-            # Tresor öffnen und Blob entschlüsseln
-            with open(container_file, "r+b") as f:
-                read_header(f)
-                f.seek(self.meta_entry["offset"])
-                blob_len = self.meta_entry["length"]
-                decrypt_blob_range(
-                    f,
-                    save_to,
-                    blob_len,
-                    self.master_key,
-                    self.meta_entry["name"],
-                    stop_event=self.stop_event,
-                )
+            save_to = export_entry_to_path(
+                self.container_path,
+                self.meta_entry,
+                self.master_key,
+                stop_event=self.stop_event,
+            )
             self.finished.emit(save_to)
 
         except Exception as e:

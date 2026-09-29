@@ -42,7 +42,7 @@ def calculate_checksum(file_path: str) -> str:
 
 # --- Meldungen ---
 def show_warning(message: str):
-    app = _get_app()
+    _get_app()  # stellt sicher, dass eine QApplication existiert
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Icon.Warning)
     msg.setWindowTitle("ANCORATE – Integritätsprüfung")
@@ -52,7 +52,7 @@ def show_warning(message: str):
 
 
 def show_info(message: str):
-    app = _get_app()
+    _get_app()  # stellt sicher, dass eine QApplication existiert
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Icon.Information)
     msg.setWindowTitle("ANCORATE – Integritätsprüfung")
@@ -62,7 +62,7 @@ def show_info(message: str):
 
 
 def ask_user_confirmation(message: str) -> bool:
-    app = _get_app()
+    _get_app()  # stellt sicher, dass eine QApplication existiert
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Icon.Question)
     msg.setWindowTitle("ANCORATE – Integritätsprüfung")
@@ -125,7 +125,7 @@ def verify_file_integrity(file_path: str = None, update=False):
         True if integrity check passed or file is new.
         False if user rejected the update (caller should consider aborting).
     Raises:
-        SystemExit: Only if file_path is missing (critical error).
+        FileNotFoundError: If file_path does not exist (critical error).
     """
     if file_path is None:
         file_path = os.path.abspath(sys.argv[0])
@@ -142,7 +142,7 @@ def verify_file_integrity(file_path: str = None, update=False):
     if filename in checksums:
         if checksums[filename] != new_checksum:
             # Datei verändert
-            show_warning( f"ANCORATE Software-Systemdateien wurden verändert!\n\n" "Das kann durch ein Update, eine lokale Änderung oder eine potenzielle Manipulation verursacht worden sein.\n" "Wenn du diese Änderung nicht erwartest, brich die Nutzung im nächsten Dialog ab und überprüfe die Datei genauer." )
+            show_warning( "ANCORATE Software-Systemdateien wurden verändert!\n\n" "Das kann durch ein Update, eine lokale Änderung oder eine potenzielle Manipulation verursacht worden sein.\n" "Wenn du diese Änderung nicht erwartest, brich die Nutzung im nächsten Dialog ab und überprüfe die Datei genauer." )
             log_checksum_action(filename, old_checksum, new_checksum, "verified")
 
             if update:
@@ -163,5 +163,5 @@ def verify_file_integrity(file_path: str = None, update=False):
         checksums[filename] = new_checksum
         save_checksums(checksums)
         log_checksum_action(filename, "", new_checksum, "registered")
-        show_info(f"Neue Version registriert und Checksumme gespeichert.\nSie sehen diese Meldung, weil Sie entweder ein Update eingespielt oder ANCORATE Software neu installiert haben.")
+        show_info("Neue Version registriert und Checksumme gespeichert.\nSie sehen diese Meldung, weil Sie entweder ein Update eingespielt oder ANCORATE Software neu installiert haben.")
     return True
