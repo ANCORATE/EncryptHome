@@ -211,7 +211,6 @@ class FileTree(QTreeWidget):
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setRootIsDecorated(True)
         self.setUniformRowHeights(True)
-        self.setAlternatingRowColors(True)
         self.setExpandsOnDoubleClick(False)
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
