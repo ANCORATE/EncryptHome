@@ -169,7 +169,7 @@ exe = EXE(
     a.scripts, a.binaries, a.zipfiles, a.datas, [],
     name='ANCORATE_EncryptHome_26.2_Build_0009',
     console=False,
-    icon=['utilities\\icon.ico'],
+    icon=['utilities\\assets\\app\\icon.ico'],
 )
 ```
 

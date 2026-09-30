@@ -279,6 +279,20 @@ QToolBar QToolButton:hover {
 QToolBar QToolButton:pressed {
     background-color: {{surface-pressed}};
 }
+/* Ohne diese Regel erben deaktivierte Buttons die Textfarbe der Basisregel
+   und wirken aktiv. */
+QToolBar QToolButton:disabled {
+    background-color: transparent;
+    border-color: transparent;
+    color: {{text-disabled}};
+}
+/* Ohne diese Regel fallen die Trenner auf den Plattform-Standard
+   zurueck, waehrend QMenu::separator sauber gestyled ist. */
+QToolBar::separator {
+    background-color: {{border-mid}};
+    width: 1px;
+    margin: 6px 4px;
+}
 QTreeWidget {
     background-color: {{surface-2}};
     alternate-background-color: {{surface-2}};
@@ -334,6 +348,32 @@ QLabel#VaultHeaderIcon {
 QLabel#VaultHeaderIcon[hasVault="true"] {
     background-color: {{accent-soft}};
     border-color: {{accent}};
+}
+/* Ansichts-Umschalter (Liste/Kompakt/Raster) in der Kopfzeile. */
+QFrame#ViewSegment {
+    background-color: {{surface-2}};
+    border: 1px solid {{border-soft}};
+    border-radius: 9px;
+}
+QFrame#ViewSegment QToolButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    padding: 4px;
+    min-width: 22px;
+    min-height: 22px;
+}
+QFrame#ViewSegment QToolButton:hover {
+    background-color: {{surface-hover}};
+    border-color: {{border-soft}};
+}
+QFrame#ViewSegment QToolButton:checked {
+    background-color: {{accent-soft}};
+    border-color: {{accent}};
+}
+QFrame#ViewSegment QToolButton:disabled {
+    background-color: transparent;
+    border-color: transparent;
 }
 QStatusBar {
     background-color: {{surface}};

@@ -12,22 +12,339 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import ctypes
 import os
+import stat
 import struct
 import tempfile
 import time
+from ctypes import wintypes
 
 from app.core import (
     HEADER_FMT,
     HEADER_LEN,
     MAGIC,
+    META_LEN_SIZE,
     VERSION,
     encrypt_meta,
     write_header,
 )
+from decrypt import decrypt_meta
 from encrypt import encrypt_file_to_blob
 
 DEFAULT_FORMAT = f"ANCORATE-SALT-{VERSION}"
+_ANY_FILE_STATE = object()
+_META_JOURNAL_MAGIC = b"ANC_META_TXN\x01"
+
+
+def _metadata_journal_path(container_path: str) -> str:
+    return container_path + ".anc-meta-recovery"
+
+
+def _read_container_metadata(container_path: str, master_key: bytes):
+    with open(container_path, "rb") as source:
+        source_size = os.fstat(source.fileno()).st_size
+        if source_size < HEADER_LEN + META_LEN_SIZE:
+            raise ValueError("Container ist zu kurz.")
+        header = source.read(HEADER_LEN)
+        if len(header) != HEADER_LEN or not header.startswith(MAGIC):
+            raise ValueError("Container-Header ist beschädigt oder unvollständig.")
+        source.seek(-META_LEN_SIZE, os.SEEK_END)
+        length_data = source.read(META_LEN_SIZE)
+        if len(length_data) != META_LEN_SIZE:
+            raise ValueError("Metadatenlänge konnte nicht gelesen werden.")
+        meta_length = struct.unpack("<Q", length_data)[0]
+        if meta_length < 12 + 16 + 32 + 1 or meta_length > (
+            source_size - HEADER_LEN - META_LEN_SIZE
+        ):
+            raise ValueError("Metadatenlänge ist ungültig.")
+        meta_pos = source_size - META_LEN_SIZE - meta_length
+        source.seek(meta_pos)
+        meta_blob = source.read(meta_length)
+        if len(meta_blob) != meta_length:
+            raise ValueError("Metadaten konnten nicht vollständig gelesen werden.")
+        meta = decrypt_meta(meta_blob, master_key)
+        return source_size, meta_pos, meta_blob, meta
+
+
+def save_container_metadata(
+    container_path: str,
+    new_meta: dict,
+    master_key: bytes,
+    *,
+    stop_event=None,
+) -> None:
+    """Replace encrypted metadata in place, journaling only the old metadata.
+
+    File blobs are never copied. The encrypted metadata backup is enough to
+    restore the original container tail if writing is interrupted.
+    """
+    journal_path = _metadata_journal_path(container_path)
+    if os.path.exists(journal_path):
+        recover_container_metadata(container_path)
+        if os.path.exists(journal_path):
+            raise RuntimeError("Eine Tresor-Wiederherstellung steht noch aus.")
+
+    original_size, meta_pos, old_meta_blob, _old_meta = _read_container_metadata(
+        container_path, master_key
+    )
+    new_meta_blob = encrypt_meta(new_meta, master_key)
+
+    journal_fd, temporary_journal = tempfile.mkstemp(
+        prefix=".anc-meta-", suffix=".tmp",
+        dir=os.path.dirname(os.path.abspath(container_path)) or os.curdir,
+    )
+    try:
+        with os.fdopen(journal_fd, "wb") as journal:
+            journal.write(_META_JOURNAL_MAGIC)
+            journal.write(b"\x00")
+            journal.write(struct.pack("<QQ", original_size, len(old_meta_blob)))
+            journal.write(old_meta_blob)
+            journal.flush()
+            os.fsync(journal.fileno())
+        os.replace(temporary_journal, journal_path)
+
+        try:
+            if stop_event is not None and stop_event.is_set():
+                raise RuntimeError("Vorgang abgebrochen")
+            with open(container_path, "rb+") as destination:
+                destination.truncate(meta_pos)
+                destination.seek(meta_pos)
+                destination.write(new_meta_blob)
+                destination.write(struct.pack("<Q", len(new_meta_blob)))
+                destination.flush()
+                os.fsync(destination.fileno())
+        except Exception:
+            recover_container_metadata(container_path)
+            raise
+
+        with open(journal_path, "rb+") as journal:
+            journal.seek(len(_META_JOURNAL_MAGIC))
+            journal.write(b"\x01")
+            journal.flush()
+            os.fsync(journal.fileno())
+        try:
+            os.remove(journal_path)
+        except OSError:
+            # The committed marker makes cleanup safe to retry on next open/save.
+            pass
+    finally:
+        if os.path.exists(temporary_journal):
+            os.remove(temporary_journal)
+
+
+def recover_container_metadata(container_path: str) -> bool:
+    """Restore the saved encrypted metadata tail after an interrupted update."""
+    journal_path = _metadata_journal_path(container_path)
+    if not os.path.exists(journal_path):
+        return False
+
+    with open(journal_path, "rb") as journal:
+        if journal.read(len(_META_JOURNAL_MAGIC)) != _META_JOURNAL_MAGIC:
+            raise ValueError("Tresor-Wiederherstellungsjournal ist ungültig.")
+        state = journal.read(1)
+        if state not in (b"\x00", b"\x01"):
+            raise ValueError("Tresor-Wiederherstellungsjournal hat ungültigen Status.")
+        if state == b"\x01":
+            old_meta_blob = None
+            original_size = 0
+            meta_length = 0
+        else:
+            lengths = journal.read(16)
+            if len(lengths) != 16:
+                raise ValueError("Tresor-Wiederherstellungsjournal ist unvollständig.")
+            original_size, meta_length = struct.unpack("<QQ", lengths)
+            if (
+                original_size < HEADER_LEN + META_LEN_SIZE
+                or meta_length < 12 + 16 + 32 + 1
+                or meta_length > original_size - HEADER_LEN - META_LEN_SIZE
+            ):
+                raise ValueError("Tresor-Wiederherstellungsjournal hat ungültige Längen.")
+            old_meta_blob = journal.read(meta_length)
+            if len(old_meta_blob) != meta_length or journal.read(1):
+                raise ValueError("Tresor-Wiederherstellungsjournal ist beschädigt.")
+
+    if old_meta_blob is None:
+        try:
+            os.remove(journal_path)
+        except OSError:
+            pass
+        return False
+
+    meta_pos = original_size - META_LEN_SIZE - meta_length
+    with open(container_path, "rb+") as destination:
+        if os.fstat(destination.fileno()).st_size < meta_pos:
+            raise ValueError("Tresor-Daten vor den Metadaten sind unvollständig.")
+        destination.truncate(meta_pos)
+        destination.seek(meta_pos)
+        destination.write(old_meta_blob)
+        destination.write(struct.pack("<Q", meta_length))
+        destination.truncate(original_size)
+        destination.flush()
+        os.fsync(destination.fileno())
+    os.remove(journal_path)
+    return True
+
+
+def _stat_signature(file_stat):
+    return (
+        file_stat.st_dev,
+        file_stat.st_ino,
+        file_stat.st_size,
+        file_stat.st_mtime_ns,
+    )
+
+
+def replace_container_with_backup(
+    temp_path: str, container_path: str, backup_path: str | None = None
+):
+    """Atomically replace a container and optionally retain the old file."""
+    if os.name != "nt":
+        os.replace(temp_path, container_path)
+        return None
+
+    if backup_path is None:
+        os.replace(temp_path, container_path)
+        return None
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    replace_file = kernel32.ReplaceFileW
+    replace_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+    )
+    replace_file.restype = wintypes.BOOL
+    if not replace_file(container_path, temp_path, backup_path, 0, None, None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return backup_path
+
+
+def _replace_container_file(temp_path: str, container_path: str, target_exists: bool):
+    if os.name != "nt" or not target_exists:
+        os.replace(temp_path, container_path)
+        return
+    replace_container_with_backup(temp_path, container_path)
+
+
+@contextmanager
+def atomic_container_write(
+    container_path: str, expected_stat=_ANY_FILE_STATE
+):
+    """Build a replacement beside the vault and swap it in only when complete."""
+    container_dir = os.path.dirname(os.path.abspath(container_path)) or os.curdir
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, dir=container_dir) as temp:
+            temp_path = temp.name
+            yield temp
+            temp.flush()
+            os.fsync(temp.fileno())
+
+        try:
+            current_stat = os.stat(container_path)
+        except FileNotFoundError:
+            current_stat = None
+
+        if expected_stat is not _ANY_FILE_STATE:
+            changed = (
+                current_stat is not None
+                if expected_stat is None
+                else current_stat is None
+                or _stat_signature(current_stat) != _stat_signature(expected_stat)
+            )
+            if changed:
+                raise RuntimeError(
+                    "Der Tresor wurde während der Änderung außerhalb der App verändert."
+                )
+
+        if current_stat is not None:
+            os.chmod(temp_path, stat.S_IMODE(current_stat.st_mode))
+        _replace_container_file(
+            temp_path, container_path, target_exists=current_stat is not None
+        )
+        temp_path = None
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+@contextmanager
+def atomic_container_update(
+    container_path: str,
+    master_key: bytes,
+    *,
+    progress_cb=None,
+    stop_event=None,
+):
+    """Yield a copy of the blob area for a safe metadata/blob update.
+
+    The existing encrypted metadata is authenticated before any replacement is
+    prepared. On error or cancellation, the original vault remains untouched.
+    """
+    with open(container_path, "rb") as source:
+        original_stat = os.fstat(source.fileno())
+        source_size = original_stat.st_size
+        if source_size < HEADER_LEN + META_LEN_SIZE:
+            raise ValueError("Container ist zu kurz.")
+
+        header = source.read(HEADER_LEN)
+        if len(header) != HEADER_LEN or not header.startswith(MAGIC):
+            raise ValueError("Container-Header ist beschädigt oder unvollständig.")
+
+        source.seek(-META_LEN_SIZE, os.SEEK_END)
+        length_data = source.read(META_LEN_SIZE)
+        if len(length_data) != META_LEN_SIZE:
+            raise ValueError("Metadatenlänge konnte nicht gelesen werden.")
+        meta_length = struct.unpack("<Q", length_data)[0]
+        if meta_length < 12 + 16 + 32 + 1 or meta_length > (
+            source_size - HEADER_LEN - META_LEN_SIZE
+        ):
+            raise ValueError("Metadatenlänge ist ungültig.")
+
+        meta_pos = source_size - META_LEN_SIZE - meta_length
+        source.seek(meta_pos)
+        old_meta_blob = source.read(meta_length)
+        if len(old_meta_blob) != meta_length:
+            raise ValueError("Metadaten konnten nicht vollständig gelesen werden.")
+        old_meta = decrypt_meta(old_meta_blob, master_key)
+
+    with atomic_container_write(container_path, original_stat) as destination:
+        with open(container_path, "rb") as source:
+            if _stat_signature(os.fstat(source.fileno())) != _stat_signature(
+                original_stat
+            ):
+                raise RuntimeError(
+                    "Der Tresor wurde während der Änderung außerhalb der App verändert."
+                )
+
+            remaining = meta_pos
+            copied = 0
+            while remaining:
+                if stop_event is not None and stop_event.is_set():
+                    raise RuntimeError("Vorgang abgebrochen")
+                chunk = source.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise IOError("Unerwartetes Dateiende im Tresor.")
+                destination.write(chunk)
+                remaining -= len(chunk)
+                copied += len(chunk)
+                if progress_cb is not None and meta_pos:
+                    progress_cb(int(copied * 100 / meta_pos))
+
+            if progress_cb is not None and meta_pos == 0:
+                progress_cb(100)
+            if stop_event is not None and stop_event.is_set():
+                raise RuntimeError("Vorgang abgebrochen")
+
+        yield destination, old_meta
 
 
 def file_sha256(path: str, chunk_size: int = 128 * 1024) -> str:

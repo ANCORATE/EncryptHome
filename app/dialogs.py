@@ -219,9 +219,11 @@ class FileTree(QTreeWidget):
         self.header().setStretchLastSection(False)
         self.setColumnWidth(self.COL_SIZE, 90)
         self.setColumnWidth(self.COL_DATE, 150)
-        self.setColumnWidth(self.COL_TYPE, 80)
         self.header().setSectionResizeMode(
             self.COL_NAME, QHeaderView.ResizeMode.Stretch
+        )
+        self.header().setSectionResizeMode(
+            self.COL_TYPE, QHeaderView.ResizeMode.ResizeToContents
         )
 
     # ---- Helfer zum Aufbau der Baumzeilen ----
@@ -868,6 +870,132 @@ class DetailsDialog(QDialog):
         flay.addStretch()
         flay.addWidget(btn)
         root.addWidget(footer)
+
+
+class FilePropertiesDialog(QDialog):
+    def __init__(self, parent, rows):
+        super().__init__(parent)
+        self.setObjectName("FilePropertiesDialog")
+        self.setWindowTitle("Dateieigenschaften")
+        self.setWindowIcon(get_app_icon())
+        self.setMinimumWidth(520)
+        self.resize(560, 460)
+        self.setWindowFlags(
+            self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(26, 22, 26, 20)
+        layout.setSpacing(18)
+
+        properties = dict(rows)
+        filename = str(properties.pop("Name", "Datei"))
+        file_type = str(properties.pop("Typ", "Unbekannt"))
+
+        header = QHBoxLayout()
+        header.setSpacing(16)
+        icon = QLabel()
+        icon.setPixmap(
+            self.style()
+            .standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+            .pixmap(36, 36)
+        )
+        header.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        identity = QVBoxLayout()
+        identity.setSpacing(4)
+        title = QLabel(filename)
+        title.setObjectName("DialogTitle")
+        title.setWordWrap(True)
+        title.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        subtitle = QLabel(file_type)
+        subtitle.setObjectName("DialogIntro")
+        identity.addWidget(title)
+        identity.addWidget(subtitle)
+        header.addLayout(identity, 1)
+        layout.addLayout(header)
+        layout.addWidget(make_separator())
+
+        groups = (
+            ("Datei", ("Größe", "Ordner im Tresor")),
+            (
+                "Zeitstempel",
+                (
+                    "Quelle zuletzt geändert",
+                    "Quelle erstellt (Dateisystem)",
+                    "Zum Tresor hinzugefügt",
+                    "Im Tresor bearbeitet",
+                ),
+            ),
+            ("Integrität", ("SHA-256",)),
+        )
+        displayed = {"Name", "Typ"}
+        for group_title, labels in groups:
+            group_rows = [
+                (label, properties[label])
+                for label in labels
+                if label in properties
+            ]
+            if not group_rows:
+                continue
+            displayed.update(label for label, _value in group_rows)
+
+            section_title = QLabel(group_title.upper())
+            section_title.setObjectName("SectionHeader")
+            layout.addWidget(section_title)
+
+            details = QGridLayout()
+            details.setVerticalSpacing(10)
+            details.setHorizontalSpacing(22)
+            details.setColumnStretch(1, 1)
+            for row_index, (label, value) in enumerate(group_rows):
+                key_label = QLabel(label)
+                key_label.setObjectName("MetaKey")
+                value_label = QLabel(str(value))
+                value_label.setObjectName("MetaValue")
+                value_label.setWordWrap(True)
+                value_label.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                details.addWidget(
+                    key_label, row_index, 0, Qt.AlignmentFlag.AlignTop
+                )
+                details.addWidget(value_label, row_index, 1)
+            layout.addLayout(details)
+
+        extra_rows = [
+            (label, value)
+            for label, value in properties.items()
+            if label not in displayed
+        ]
+        if extra_rows:
+            section_title = QLabel("WEITERE ANGABEN")
+            section_title.setObjectName("SectionHeader")
+            layout.addWidget(section_title)
+            details = QGridLayout()
+            details.setVerticalSpacing(10)
+            details.setHorizontalSpacing(22)
+            details.setColumnStretch(1, 1)
+            for row_index, (label, value) in enumerate(extra_rows):
+                key_label = QLabel(label)
+                key_label.setObjectName("MetaKey")
+                value_label = QLabel(str(value))
+                value_label.setObjectName("MetaValue")
+                value_label.setWordWrap(True)
+                value_label.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                details.addWidget(
+                    key_label, row_index, 0, Qt.AlignmentFlag.AlignTop
+                )
+                details.addWidget(value_label, row_index, 1)
+            layout.addLayout(details)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.accept)
+        layout.addWidget(buttons)
 
 
 class AboutDialog(QDialog):

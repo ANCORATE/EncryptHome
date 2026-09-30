@@ -1,0 +1,16 @@
+Willkommen bei ANCORATE
+
+ANCORATE ist eine sicherheitsorientierte Verschlüsselungssoftware zum Schutz sensibler Daten.
+Während der Installation werden alle notwendigen Komponenten eingerichtet, um eine gerätegebundene, kryptografisch starke Verschlüsselung zu gewährleisten.
+
+Wichtige Hinweise:
+
+Die Sicherheit Ihrer Daten hängt direkt von diesem Gerät ab
+
+Verschlüsselte Dateien können nur auf diesem System wiederhergestellt werden
+
+Ein Verlust des Geräts oder der Schlüssel kann zu irreversiblem Datenverlust führen
+
+Bitte stellen Sie sicher, dass Sie dieses Programm nur auf einem vertrauenswürdigen System installieren.
+
+Klicken Sie auf „Installieren“, um fortzufahren.

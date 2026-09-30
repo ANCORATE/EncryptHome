@@ -153,7 +153,9 @@ PALETTES = {
         "accent-hover": "#ffdf5e",
         "accent-pressed": "#c9a600",
         "accent-soft": "#4a3a00",
-        "on-soft": "#000000",
+        # Schwarz auf #4a3a00 ergibt nur 1.9:1 und macht ausgewaehlte Zeilen
+        # und Menueeintraege unlesbar. Weiss erreicht 8.6:1.
+        "on-soft": "#ffffff",
         "accent-focus": "#ffd028",
         "on-accent": "#000000",
         "link": "#ffd028",
@@ -319,13 +321,24 @@ def scale_fonts(css: str, factor: float) -> str:
     return _FONT_RE.sub(_rep, css)
 
 
+def resolve_palette(theme_name: str = "Standard-dark", accent: str = "") -> dict:
+    """Effektive Palette eines Themes inkl. benutzerdefinierter Akzentfarbe.
+
+    Dieselbe Quelle speist das QSS (build_stylesheet) und die UI-Icons
+    (utilities.ui_icons), damit beide exakt dieselben Farbtoken verwenden.
+    """
+    if theme_name not in THEME_FILES:
+        theme_name = "Standard-dark"
+    return _apply_accent(PALETTES.get(theme_name, PALETTES["Standard-dark"]),
+                         accent)
+
+
 def build_stylesheet(theme_name: str = "Standard-dark", accent: str = "",
                      density: str = DEFAULT_DENSITY) -> str:
     """Erzeugt das finale QSS fuer Theme + Akzentfarbe + Dichte."""
     if theme_name not in THEME_FILES:
         theme_name = "Standard-dark"
-    palette = _apply_accent(PALETTES.get(theme_name, PALETTES["Standard-dark"]),
-                            accent)
+    palette = resolve_palette(theme_name, accent)
     css_path = os.path.join(THEME_DIR, THEME_FILES[theme_name])
     with open(css_path, "r", encoding="utf-8") as f:
         css = f.read()

@@ -1,0 +1,17 @@
+Installation erfolgreich abgeschlossen
+
+ANCORATE wurde erfolgreich installiert und ist nun einsatzbereit.
+Ihre Daten können ab sofort sicher, lokal und ohne externe Abhängigkeiten verschlüsselt werden.
+
+Was Sie jetzt wissen sollten:
+
+Verschlüsselungen sind fest an dieses Gerät gebunden
+
+Es existiert keine Hintertür und kein Wiederherstellungsdienst
+
+Bewahren Sie verschlüsselte Dateien und Schlüssel verantwortungsvoll auf
+
+Wir empfehlen, zunächst eine Testdatei zu verschlüsseln, um sich mit dem Ablauf vertraut zu machen.
+
+Vielen Dank, dass Sie sich für ANCORATE entschieden haben.
+Sicherheit beginnt bei Kontrolle.

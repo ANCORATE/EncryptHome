@@ -1,4 +1,15 @@
 ; Script to generate an ANCORATE EncryptHome Setup.
+;
+; Voraussetzung vor dem Kompilieren dieses Skripts (dist\ ist nicht
+; versioniert und wird nach jedem Build geloest):
+;   1. pyinstaller ANCORATE_EncryptHome_27_Beta_1.spec
+;      -> erzeugt dist\ANCORATE_EncryptHome_27_Beta_1.exe
+;   2. Handschritt fuer den Onefile-Build: die Daten aus 'datas' landen
+;      im EXE, nicht in dist\. Fuer den Installer muessen sie zusaetzlich
+;      neben das EXE gelegt werden:
+;        copy TOS.txt dist\TOS.txt
+;        xcopy /E /I utilities dist\utilities
+;   3. Inno Setup auf diese Datei ausfuehren -> dist\setup_output\*.exe
 
 #define MyAppName "ANCORATE EncryptHome"
 #define MyAppVersion "27 Beta 1"
@@ -27,14 +38,16 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
 DisableProgramGroupPage=yes
-InfoBeforeFile=dist\Willkommen bei ANCORATE.txt
-InfoAfterFile=dist\Installation erfolgreich abgeschlos.txt
+; Die Info-Texte liegen im Repository, nicht in dist\ - dist\ wird nach
+; jedem Build geleert und ist nicht versioniert.
+InfoBeforeFile=Willkommen bei ANCORATE.txt
+InfoAfterFile=Installation erfolgreich abgeschlos.txt
 ; Uncomment the following line to run in non administrative install mode (install for current user only).
 ;PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=dist\setup_output
 OutputBaseFilename=ANCORATE_EncryptHome_27_Beta_1_Setup
-SetupIconFile=utilities\icon.ico
+SetupIconFile=utilities\assets\app\icon.ico
 SolidCompression=yes
 WizardStyle=modern dynamic windows11
 

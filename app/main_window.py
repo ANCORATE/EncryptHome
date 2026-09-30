@@ -12,6 +12,7 @@ import platform
 import secrets
 import tempfile
 import threading
+import copy
 from collections import OrderedDict
 
 from PyQt6.QtCore import *
@@ -22,7 +23,12 @@ from PyQt6.QtGui import *
 from decrypt import *
 from decrypt_preview import PREVIEW_MAX_BYTES, PreviewDecryptWorker, show_preview
 from encrypt import *
+from utilities.container_ops import (
+    atomic_container_write,
+    recover_container_metadata,
+)
 from utilities.file_types import type_label
+from utilities.file_type_icons import file_type_icon
 
 # Utilities
 from utilities.screenshot_protection import (
@@ -30,6 +36,14 @@ from utilities.screenshot_protection import (
     uninstall_screenshot_protection,
 )
 from utilities.settings import *
+from utilities.ui_icons import (
+    active_icon_colors,
+    has_icon,
+    icon_size_hint,
+    render_pixmap,
+    set_active_ui_theme,
+    ui_icon,
+)
 
 from app.core import *
 from app.core import _secure_zero_bytes
@@ -68,11 +82,17 @@ class App(QMainWindow):
     LAN_MAGIC = b"ANCORATE_DISCOVER_V1"
     LAN_CHUNK = 64 * 1024  # 64 KiBp
 
+    # Fallback, falls die Toolbar vor dem ersten Messen noch nicht existiert.
+    TOOLBAR_WIDE_MIN_WIDTH = 900
+
     def __init__(self):  # Hauptfenster der Anwendung
         super().__init__()
         self.setWindowTitle(f"ANCORATE {edition} {version} - kein Tresor geöffnet")
         self.setWindowIcon(get_app_icon())
-        self.resize(1080, 720)
+        # 1200 px, damit die beschriftete Leiste (gemessener Bedarf ~1050 px)
+        # auch im Standardfenster sichtbar ist. Schmaler schaltet sie selbst
+        # auf reine Icons um, _update_responsive_toolbar().
+        self.resize(1200, 720)
         self.exporting = False
         self.pwd = ""
         self.container_path = None
@@ -160,6 +180,9 @@ class App(QMainWindow):
             self.header_icon, 0, Qt.AlignmentFlag.AlignVCenter
         )
         header_layout.addLayout(name_col, 1)
+        # Ansichts-Umschalter (Liste/Kompakt/Raster) und Suche sitzen rechts;
+        # die Aktionen selbst werden in _build_view_segment() befuellt.
+        self.header_layout = header_layout
         header_layout.addWidget(self.search, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # --- Dateiliste: Baum + Raster in einem Stapel ---
@@ -181,6 +204,9 @@ class App(QMainWindow):
             "Bereit. Kein Tresor geöffnet. - 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin"
         )
         self.status.setObjectName("status")
+        self.status.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         self.statusBar().addWidget(self.status, 1)
 
         central = QWidget()
@@ -193,6 +219,7 @@ class App(QMainWindow):
 
         # --- Toolbar ---
         self._create_actions()
+        self._build_view_segment()
         self._build_toolbar()
         self._set_vault_actions_enabled(False)
 
@@ -221,6 +248,9 @@ class App(QMainWindow):
         self.del_container_sc.activated.connect(lambda: self.delete_container())
         self.search_sc.activated.connect(self.start_search)
         self.recent_containers_sc.activated.connect(self.show_recent_containers)
+
+        # Tooltips der Toolbar-Aktionen um die Kürzel ergänzen
+        self._register_action_shortcuts()
 
         self.setStyleSheet(APP_STYLE)
 
@@ -443,6 +473,7 @@ class App(QMainWindow):
     def _set_vault_actions_enabled(self, enabled: bool):
         for action in getattr(self, "_vault_actions", []):
             action.setEnabled(enabled)
+        self._update_chrome_visibility()
 
     def _set_views_enabled(self, enabled: bool):
         """Aktiviert/deaktiviert Baum- und Rasteransicht gemeinsam."""
@@ -509,59 +540,192 @@ class App(QMainWindow):
         self.setMenuBar(menubar)
 
     def _build_toolbar(self):
-        """Primäre Aktionen als Toolbar (Suche sitzt in der Kopfzeile)."""
-        tb = QToolBar("Haupt", self)
+        """Primäre Aktionen als Icon-Toolbar (Ansicht + Suche in der Kopfzeile)."""
+        tb = QToolBar("Toolbar einblenden", self)
         tb.setObjectName("MainToolBar")
         tb.setMovable(False)
-        tb.setIconSize(QSize(18, 18))
-        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        tb.setFloatable(False)
+        tb.setIconSize(icon_size_hint())
+        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
 
-        toolbar_icons = {
-            self.act_new: QStyle.StandardPixmap.SP_FileDialogNewFolder,
-            self.act_open: QStyle.StandardPixmap.SP_DialogOpenButton,
-            self.act_add: QStyle.StandardPixmap.SP_FileDialogToParent,
-            self.act_preview: QStyle.StandardPixmap.SP_FileDialogInfoView,
-            self.act_export: QStyle.StandardPixmap.SP_DialogSaveButton,
-            self.act_delete: QStyle.StandardPixmap.SP_TrashIcon,
-            self.act_view_list: QStyle.StandardPixmap.SP_FileDialogDetailedView,
-            self.act_view_compact: QStyle.StandardPixmap.SP_FileDialogListView,
-            self.act_view_grid: QStyle.StandardPixmap.SP_FileDialogContentsView,
+        self.act_more = QAction("Mehr", self)
+        self.act_more.setToolTip("Weitere Aktionen")
+        self.act_more.setMenu(self._build_overflow_menu())
+
+        # iconText steuert die Beschriftung des QToolButton, nicht die
+        # Menüeinträge: Im Menü bleibt "Datei(en) hinzufügen…" stehen, während
+        # die Toolbar eine kurze Beschriftung zeigt - und ohne eine zweite
+        # Aktion mit eigenem Enable-Status zu duplizieren.
+        self._action_glyphs = {
+            self.act_new: "vault-new",
+            self.act_open: "vault-open",
+            self.act_add: "add-file",
+            self.act_preview: "preview",
+            self.act_export: "export",
+            self.act_delete: "trash",
+            self.act_more: "more",
         }
-        for action, standard_icon in toolbar_icons.items():
-            action.setIcon(self.style().standardIcon(standard_icon))
-            action.setToolTip(action.text())
+        for action in self._action_glyphs:
+            action.setIconText(action.text().rstrip(". …"))
+        # Innerhalb der Tresor-Leiste ist das führende "Datei" redundant, und
+        # die Leiste soll auch bei 1200 px Breite beschriftet bleiben. Kürzere
+        # Beschriftungen erzeugen zudem einen niedrigeren sizeHint.
+        self.act_add.setIconText("Hinzufügen")
+        self.act_preview.setIconText("Vorschau")
+        self.act_export.setIconText("Exportieren")
+        self.act_delete.setIconText("Löschen")
+        self._refresh_action_icons()
 
         tb.addAction(self.act_new)
         tb.addAction(self.act_open)
-        tb.addSeparator()
+        self._tb_sep_files = tb.addSeparator()
         tb.addAction(self.act_add)
         tb.addAction(self.act_preview)
         tb.addAction(self.act_export)
         tb.addAction(self.act_delete)
-        tb.addSeparator()
-        tb.addAction(self.act_view_list)
-        tb.addAction(self.act_view_compact)
-        tb.addAction(self.act_view_grid)
+        self._tb_sep_more = tb.addSeparator()
+        tb.addAction(self.act_more)
 
         self.addToolBar(tb)
         self.toolbar = tb
+        # QToolBar setzt bei einer Aktion mit Menü "MenuButtonPopup": der
+        # Knopf selbst löst nur die Aktion aus, erst der kleine Pfeil öffnet
+        # das Menü. Für "Mehr" ist das die falsche Bedienung, deshalb wird der
+        # ganze Knopf zum Aufklapper.
+        more_button = tb.widgetForAction(self.act_more)
+        if more_button is not None:
+            more_button.setPopupMode(
+                QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._measure_toolbar_width()
         self._update_responsive_toolbar()
+        self._update_chrome_visibility()
+
+    def _build_view_segment(self):
+        """Ansichtsmodi als Segment-Control in die Kopfzeile, links der Suche."""
+        self.view_segment = QFrame(self.header)
+        self.view_segment.setObjectName("ViewSegment")
+        seg_layout = QHBoxLayout(self.view_segment)
+        seg_layout.setContentsMargins(2, 2, 2, 2)
+        seg_layout.setSpacing(2)
+        self._view_buttons = []
+        for action in (self.act_view_list, self.act_view_compact,
+                       self.act_view_grid):
+            button = QToolButton(self.view_segment)
+            button.setObjectName("ViewSegmentButton")
+            # setDefaultAction bindet den Button an die Aktion: Text, Icon und
+            # Checkzustand bleiben dadurch einheitlich mit Menü und _set_view_mode.
+            button.setDefaultAction(action)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setAutoRaise(True)
+            button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+            seg_layout.addWidget(button)
+            self._view_buttons.append(button)
+        self._view_glyphs = {
+            self.act_view_list: "view-list",
+            self.act_view_compact: "view-compact",
+            self.act_view_grid: "view-grid",
+        }
+        self._refresh_action_icons()
+        self.header_layout.insertWidget(
+            self.header_layout.indexOf(self.search), self.view_segment
+        )
+
+    def _build_overflow_menu(self):
+        """Dateiaktionen ohne dauerhaften Toolbar-Slot.
+
+        Bewusst nur die drei Aktionen, die bisher weder in der Toolbar noch
+        sonst gut auffindbar waren. Alles Weitere bleibt in der Menüleiste,
+        damit das Overflow-Menü sie nicht dupliziert.
+        """
+        menu = QMenu(self)
+        menu.addAction(self.act_edit)
+        menu.addAction(self.act_export_all)
+        menu.addAction(self.act_new_folder)
+        return menu
+
+    def _refresh_action_icons(self):
+        """Toolbar- und Ansichts-Glyphen aus dem aktiven Theme neu laden."""
+        for action, glyph in getattr(self, "_action_glyphs", {}).items():
+            action.setIcon(ui_icon(glyph))
+        for action, glyph in getattr(self, "_view_glyphs", {}).items():
+            action.setIcon(ui_icon(glyph))
+        if hasattr(self, "toolbar"):
+            self.toolbar.setIconSize(icon_size_hint())
+            self._measure_toolbar_width()
+
+    def _register_action_shortcuts(self):
+        """Ordnet Toolbar-Aktionen ihre Tastenkürzel zu und schreibt die Tooltips.
+
+        Gelesen wird das QShortcut-Objekt, nicht die settings.json - so zeigt
+        der Tooltip immer das wirklich aktive Kürzel.
+        """
+        self._action_shortcuts = {
+            self.act_new: self.create_vault_sc,
+            self.act_open: self.open_vault_sc,
+            self.act_add: self.add_sec_sc,
+            self.act_export: self.ex_selected_sc,
+            self.act_delete: self.remove_sc,
+        }
+        for action, shortcut in self._action_shortcuts.items():
+            label = action.text().rstrip(". …")
+            keys = shortcut.key().toString(
+                QKeySequence.SequenceFormat.NativeText
+            )
+            action.setToolTip(f"{label} ({keys})" if keys else label)
+        for action in getattr(self, "_view_glyphs", {}):
+            action.setToolTip(f"Ansicht: {action.text()}")
+
+    def _measure_toolbar_width(self):
+        """Mindestbreite der Toolbar für die beschriftete Variante.
+
+        Gemessen statt hart kodiert, weil Schriftgröße (Dichte) und Theme die
+        Buttonbreiten mitbestimmen; eine feste Pixelgrenze wäre bei
+        "Komfortabel" zu klein und bei "Kompakt" zu groß.
+        """
+        if not hasattr(self, "toolbar"):
+            return
+        wide = Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        previous = self.toolbar.toolButtonStyle()
+        self.toolbar.setToolButtonStyle(wide)
+        self.toolbar.layout().invalidate()
+        needed = self.toolbar.sizeHint().width()
+        self.toolbar.setToolButtonStyle(previous)
+        self.toolbar.layout().invalidate()
+        self._toolbar_wide_min_width = int(needed) + 16
 
     def _update_responsive_toolbar(self):
-        """Switches between readable and compact controls as space changes."""
+        """Beschriftung und Suchfeld an die tatsächliche Breite anpassen."""
         if not hasattr(self, "toolbar"):
             return
 
-        width = self.width()
-        compact = width < 820
+        min_width = getattr(
+            self, "_toolbar_wide_min_width", self.TOOLBAR_WIDE_MIN_WIDTH
+        )
+        compact = self.width() < min_width
         self.toolbar.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonIconOnly
-            if compact
-            else Qt.ToolButtonStyle.ToolButtonTextOnly
+            if compact else Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
         self.search.setMaximumWidth(200 if compact else 280)
         self.search.setMinimumWidth(140 if compact else 200)
-        self.search.setToolTip("Im Tresor suchen")
+
+    def _update_chrome_visibility(self):
+        """Ohne Tresor bleiben nur „Neuer Tresor“ und „Tresor öffnen“ sichtbar.
+
+        Dateiaktionen und Ansichts-Umschalter wären ohne Tresor dauerhaft
+        deaktiviert und auf dem Startbildschirm reines Ballast-UI.
+        """
+        if not hasattr(self, "toolbar"):
+            return
+        has_vault = self.master_key is not None
+        for action in (self.act_add, self.act_preview, self.act_export,
+                       self.act_delete, self.act_more):
+            action.setVisible(has_vault)
+        self._tb_sep_files.setVisible(has_vault)
+        self._tb_sep_more.setVisible(has_vault)
+        self.view_segment.setVisible(has_vault)
+        self._measure_toolbar_width()
+        self._update_responsive_toolbar()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -603,12 +767,32 @@ class App(QMainWindow):
         self._tree.setColumnHidden(FileTree.COL_TYPE, False)
 
     def _set_header_icon(self, has_vault: bool):
-        """Kopfzeilen-Icon: Laufwerk bei geöffnetem, Schloss ohne Tresor."""
-        icon = self.style().standardIcon(
-            QStyle.StandardPixmap.SP_DriveHDIcon if has_vault
-            else QStyle.StandardPixmap.SP_FileDialogDetailedView
-        )
-        self.header_icon.setPixmap(icon.pixmap(28, 28))
+        """Kopfzeilen-Icon: Buendel offen bei geoeffnetem, verschlossen sonst.
+
+        Bewusst eigene Glyphen statt QStyle-Standardpixmaps: bei 28 px
+        rendern SP_FileDialogDetailedView als geschlossener Block und
+        SP_DriveHDIcon als kaum sichtbares Eckdreieck - beide ohne
+        erkennbare Bedeutung. Die Kopfzeile nutzt dieselbe Pipeline wie die
+        Toolbar, damit Farbe, DPI und Theme einheitlich mitziehen.
+
+        Farbwahl folgt dem Stylesheet: bei geoeffnetem Tresor steht die
+        Glyphe auf ``accent-soft`` und nutzt daher ``on-soft`` - denselben
+        Token, den das Segment-Control fuer seine Auswahl verwendet. Ohne
+        Tresor steht sie auf ``surface-2``, dort ist ``text`` die kontrast-
+        staerkste vorhandene Wahl (``text-disabled`` laege bei unter 2:1).
+        """
+        colors = active_icon_colors()
+        name = "lock-open" if has_vault else "lock-closed"
+        color = colors["on"] if has_vault else colors["normal"]
+        if has_icon(name):
+            self.header_icon.setPixmap(render_pixmap(name, color, 28))
+        else:  # pragma: no cover - nur falls eine Glyphe fehlt
+            self.header_icon.setPixmap(
+                self.style().standardIcon(
+                    QStyle.StandardPixmap.SP_DirOpenIcon if has_vault
+                    else QStyle.StandardPixmap.SP_DirClosedIcon
+                ).pixmap(28, 28)
+            )
         self.header_icon.setProperty("hasVault", has_vault)
         style = self.header_icon.style()
         style.unpolish(self.header_icon)
@@ -870,8 +1054,16 @@ class App(QMainWindow):
             accent = str(s.get("ui_accent", "") or "")
             density = str(s.get("ui_density", "Mittel") or "Mittel")
 
+            # Icons aus derselben Palette beziehen, damit QSS und Glyphen
+            # bei Theme-, Akzent- und Dichtewechsel gemeinsam umschalten.
+            set_active_ui_theme(theme_name, accent, density)
+
             def _swap():
                 self.setStyleSheet(build_stylesheet(theme_name, accent, density))
+                self._refresh_action_icons()
+                # Kopfzeilen-Glyphe ebenfalls neu einfärben, sonst behält sie
+                # nach einem Theme- oder Akzentwechsel die alte Palettenfarbe.
+                self._set_header_icon(bool(self.container_path))
 
             fade_theme_swap(_swap, theme_name)
             print(f"[SETTINGS] Theme '{theme_name}' angewendet "
@@ -1033,35 +1225,6 @@ class App(QMainWindow):
             else:
                 self.open_container()
 
-    # ------------------ In-Tresor-Bearbeitung: Helfer ------------------
-    def _persist_meta(self):
-        """Schreibt self.meta als neuen Meta-Blob ans Container-Ende."""
-        if not self.container_path or not self.master_key:
-            return
-        with open(self.container_path, "rb+") as fh:
-            fh.seek(-META_LEN_SIZE, os.SEEK_END)
-            meta_len_bytes = fh.read(META_LEN_SIZE)
-            if len(meta_len_bytes) != META_LEN_SIZE:
-                raise ValueError("Meta-Länge konnte nicht gelesen werden.")
-            meta_len = struct.unpack("<Q", meta_len_bytes)[0]
-            meta_pos = os.path.getsize(self.container_path) - META_LEN_SIZE - meta_len
-            fh.truncate(meta_pos)
-            fh.seek(0, os.SEEK_END)
-            blob = encrypt_meta(self.meta, self.master_key)
-            fh.write(blob)
-            fh.write(struct.pack("<Q", len(blob)))
-
-    def _record_container_opened(self):
-        """Protokolliert den letzten Öffnungszeitpunkt des Tresors."""
-        try:
-            meta = dict(self.meta)
-            meta["opened"] = int(time.time())
-            meta["app_version"] = f"{edition} {version}"
-            self.meta = meta
-            self._persist_meta()
-        except Exception as e:
-            self.append_log(f"Opened-Zeitstempel konnte nicht gespeichert werden: {e}")
-
     def open_container_with_password(self, container_path: str, password: str):
         """Öffnet einen bestehenden Container mit dem angegebenen Passwort"""
 
@@ -1070,6 +1233,10 @@ class App(QMainWindow):
         pwd = password
 
         try:
+            if recover_container_metadata(self.container_path):
+                self.append_log(
+                    "Unterbrochene Metadatenänderung wurde zurückgesetzt."
+                )
             # ------------------------------------------------------------------
             # 4. Datei öffnen
             # ------------------------------------------------------------------
@@ -1129,7 +1296,6 @@ class App(QMainWindow):
             self.meta = meta
             self.flags = flags
             self.update_container_path(self.container_path)
-            self._record_container_opened()
             self._auto_lock_rearm()
 
             # ------------------------------------------------------------------
@@ -1223,6 +1389,10 @@ Mögliche Ursache
             return
 
         try:
+            if recover_container_metadata(self.container_path):
+                self.append_log(
+                    "Unterbrochene Metadatenänderung wurde zurückgesetzt."
+                )
             # ------------------------------------------------------------------
             # 4. Datei öffnen
             # ------------------------------------------------------------------
@@ -1282,7 +1452,6 @@ Mögliche Ursache
             self.meta = meta
             self.flags = flags
             self.update_container_path(self.container_path)
-            self._record_container_opened()
             self._auto_lock_rearm()
 
             # ------------------------------------------------------------------
@@ -1343,7 +1512,9 @@ Mögliche Ursache
             QMessageBox.warning(self, "Fehler", "Wähle zuerst einen Dateipfad aus.")
             return
         # Prüfen, ob Container bereits existiert
+        existing_stat = None
         if os.path.exists(self.container_path):
+            existing_stat = os.stat(self.container_path)
             if (
                 QMessageBox.question(
                     self,
@@ -1383,10 +1554,20 @@ Mögliche Ursache
 
         meta_blob = encrypt_meta(meta, master)
 
-        with open(self.container_path, "wb") as fh:
-            write_header(fh, flags, salt)
-            fh.write(meta_blob)
-            fh.write(struct.pack("<Q", len(meta_blob)))
+        try:
+            with atomic_container_write(
+                self.container_path, expected_stat=existing_stat
+            ) as fh:
+                write_header(fh, flags, salt)
+                fh.write(meta_blob)
+                fh.write(struct.pack("<Q", len(meta_blob)))
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Tresor konnte nicht erstellt werden",
+                f"Der Tresor wurde nicht ersetzt oder erstellt:\n{e}",
+            )
+            return
 
         self.master_key = master
         self.meta = meta
@@ -1615,10 +1796,12 @@ Mögliche Ursache
         thread = QThread()
         self._track_worker_thread(thread, add_stop_event)
         worker.moveToThread(thread)
+        self._set_vault_actions_enabled(False)
+        self._set_views_enabled(False)
 
         # Verbindung für Fortschritt und Fehler
         worker.progress.connect(self._on_progress)
-        worker.error.connect(lambda e: self._worker_error(e, thread, worker))
+        worker.error.connect(lambda e: self._add_worker_error(e, thread, worker))
 
         # Hier die korrekte Lambda‑Verbindung:
         worker.finished.connect(
@@ -1636,7 +1819,9 @@ Mögliche Ursache
 
         # konkreter Modality‑Wert
         self.progress.setWindowTitle(f"ANCORATE {edition}")  # ← hier
+        self.progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.progress.canceled.connect(lambda ev=add_stop_event: ev.set())
+        worker.stage.connect(self.progress.setLabelText)
         self.progress.setValue(0)
         self.progress.show()
 
@@ -2484,7 +2669,7 @@ Mögliche Ursache
         worker.deleteLater()
         thread.deleteLater()
         self._release_worker_thread(thread)
-        self.append_log("Added files: " + ", ".join(added))
+        self.append_log(f"{len(added)} Datei(en) hinzugefügt.")
         try:
             with open(self.container_path, "rb") as fh:
                 fh.seek(-META_LEN_SIZE, os.SEEK_END)
@@ -2497,7 +2682,16 @@ Mögliche Ursache
                 self.meta = decrypt_meta(meta_blob, self.master_key)
         except Exception as e:
             self.append_log(f"Error reloading meta: {e}")
-        self.refresh_list()
+        self._set_views_enabled(bool(self.master_key))
+        self._set_vault_actions_enabled(bool(self.master_key))
+        self.refresh_list(bool(self.search.text()))
+
+    def _add_worker_error(self, error, thread, worker):
+        try:
+            self._worker_error(error, thread, worker)
+        finally:
+            self._set_views_enabled(bool(self.master_key))
+            self._set_vault_actions_enabled(bool(self.master_key))
 
     # ------------------ Worker Callbacks ------------------
     def _worker_error(self, error, thread, worker):
@@ -2668,11 +2862,11 @@ Mögliche Ursache
         )
         return (_item_name(name), size_text, date_text, type_label(name))
 
-    def _file_icon(self):
-        if getattr(self, "_file_icon_impl", None) is None:
-            self._file_icon_impl = self.style().standardIcon(
-                QStyle.StandardPixmap.SP_FileIcon)
-        return self._file_icon_impl
+    def _file_icon(self, filename=""):
+        icon = file_type_icon(filename)
+        if not icon.isNull():
+            return icon
+        return self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
 
     # ------------------ Geführter Leerzustand ------------------
     def _ensure_empty_state(self):
@@ -2795,10 +2989,11 @@ Mögliche Ursache
                         )
                     )
                 else:
+                    file_name = ent.get("name", "?")
                     self._grid.addItem(
                         self._grid.make_item(
-                            role, _item_name(ent.get("name", "?")),
-                            self._file_icon(),
+                            role, _item_name(file_name),
+                            self._file_icon(file_name),
                         )
                     )
         else:
@@ -2822,10 +3017,11 @@ Mögliche Ursache
             )
 
     def _add_file_row(self, idx, ent, show_size, show_date, parent=None):
+        name = ent.get("name", "<unnamed>")
         columns = self._file_columns(
-            ent.get("name", "<unnamed>"), ent, show_size, show_date
+            name, ent, show_size, show_date
         )
-        item = self._tree.make_item(idx, columns, icon=self._file_icon())
+        item = self._tree.make_item(idx, columns, icon=self._file_icon(name))
         if parent is None:
             self._tree.addTopLevelItem(item)
         else:
@@ -2857,7 +3053,7 @@ Mögliche Ursache
         for idx, ent in entries:
             name = ent.get("name", "")
             label = _item_name(name)
-            item = self._grid.make_item(idx, label, self._file_icon())
+            item = self._grid.make_item(idx, label, self._file_icon(name))
             size = self._size_text(ent.get("size", 0)) if show_size else ""
             item.setToolTip(f"{name}\n{size}" if size else name)
             self._grid.addItem(item)
@@ -3075,7 +3271,7 @@ Mögliche Ursache
         if isinstance(role, tuple) and len(role) == 2 and role[0] == "folder":
             self._folder_context_menu(role[1], pos)
         elif isinstance(role, int):
-            self._file_context_menu(pos)
+            self._file_context_menu(pos, role)
         else:
             self._empty_context_menu(pos)
 
@@ -3101,7 +3297,7 @@ Mögliche Ursache
         elif chosen == act_delete:
             self._delete_folder(folder)
 
-    def _file_context_menu(self, pos):
+    def _file_context_menu(self, pos, file_index):
         menu = QMenu(self)
         act_preview = menu.addAction("Vorschau")
         act_edit = menu.addAction("Im Tresor bearbeiten")
@@ -3110,8 +3306,12 @@ Mögliche Ursache
         act_move = menu.addAction("In Ordner verschieben…")
         menu.addSeparator()
         act_delete = menu.addAction("Löschen")
+        menu.addSeparator()
+        act_properties = menu.addAction("Eigenschaften")
         chosen = menu.exec(self.file_list.viewport().mapToGlobal(pos))
-        if chosen == act_preview:
+        if chosen == act_properties:
+            self._show_file_properties(file_index)
+        elif chosen == act_preview:
             self.preview_selected()
         elif chosen == act_edit:
             self.start_in_vault_edit()
@@ -3121,6 +3321,49 @@ Mögliche Ursache
             self._move_selected_to_folder("")
         elif chosen == act_delete:
             self.delete_selected()
+
+    def _show_file_properties(self, file_index):
+        entries = self.meta.get("files", [])
+        if not isinstance(entries, list) or not 0 <= file_index < len(entries):
+            return
+
+        entry = entries[file_index]
+        name = str(entry.get("name", "<unbenannt>"))
+        try:
+            size_text = self._size_text(int(entry.get("size", 0)))
+        except (TypeError, ValueError, OverflowError):
+            size_text = "Unbekannt"
+
+        rows = [
+            ("Name", _item_name(name)),
+            ("Typ", type_label(name)),
+            ("Größe", size_text),
+        ]
+        folder = _folder_of(name)
+        if folder:
+            rows.append(("Ordner im Tresor", folder))
+
+        for field, label in (
+            ("mtime", "Quelle zuletzt geändert"),
+            ("created", "Quelle erstellt (Dateisystem)"),
+            ("added", "Zum Tresor hinzugefügt"),
+            ("edited", "Im Tresor bearbeitet"),
+        ):
+            timestamp = entry.get(field)
+            if timestamp is None:
+                continue
+            try:
+                formatted = time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(float(timestamp))
+                )
+            except (OverflowError, OSError, TypeError, ValueError):
+                formatted = "Unbekannt"
+            rows.append((label, formatted))
+
+        if entry.get("sha256"):
+            rows.append(("SHA-256", str(entry["sha256"])))
+
+        FilePropertiesDialog(self, rows).exec()
 
     def _empty_context_menu(self, pos):
         menu = QMenu(self)
@@ -3156,18 +3399,22 @@ Mögliche Ursache
         )
         if not ok or not name.strip():
             return
+        previous_meta = copy.deepcopy(self.meta)
         path = f"{base}{name.strip().strip(FOLDER_SEP)}"
         folders = set(self.meta.get("folders") or [])
         folders.add(path)
         self.meta["folders"] = sorted(folders, key=str.lower)
-        self._save_meta()
-        self.current_folder = path
-        if self._expanded_folders is None:
-            self._expanded_folders = set(self._all_folders())
-        self._expanded_folders.add(_folder_of(path))
-        self._expanded_folders.add(path)
-        self.refresh_list()
-        show_toast(self, "Ordner erstellt", path)
+
+        def on_saved():
+            self.current_folder = path
+            if self._expanded_folders is None:
+                self._expanded_folders = set(self._all_folders())
+            self._expanded_folders.add(_folder_of(path))
+            self._expanded_folders.add(path)
+            self.refresh_list(bool(self.search.text()))
+            show_toast(self, "Ordner erstellt", path)
+
+        self._save_meta(previous_meta, on_saved)
 
     def _move_selected_to_folder(self, target: str):
         idxs = self._selected_meta_indexes()
@@ -3207,6 +3454,7 @@ Mögliche Ursache
     def _apply_move(self, indexes, target: str):
         """Verschiebt Datei-Einträge in den Zielordner (nur Pfad/Name, keine
         Neuverschlüsselung) und hält Namen eindeutig."""
+        previous_meta = copy.deepcopy(self.meta)
         target = target or ""
         folders = set(self.meta.get("folders") or [])
         prefix = target + FOLDER_SEP if target else ""
@@ -3231,13 +3479,16 @@ Mögliche Ursache
         if target:
             folders.add(target)
         self.meta["folders"] = sorted(folders, key=str.lower)
-        self._save_meta()
-        self.current_folder = target
-        self.refresh_list()
-        show_toast(
-            self, "Verschoben",
-            f"{len(changed)} Datei(en) nach „{target or '(Root)'}“.",
-        )
+
+        def on_saved():
+            self.current_folder = target
+            self.refresh_list(bool(self.search.text()))
+            show_toast(
+                self, "Verschoben",
+                f"{len(changed)} Datei(en) nach „{target or '(Root)'}“.",
+            )
+
+        self._save_meta(previous_meta, on_saved)
 
     def _unique_entry_name(self, name: str, exclude: int) -> str:
         """Fügt bei Namenskollision einen Zähler an (datei.txt -> datei (2).txt)."""
@@ -3279,6 +3530,7 @@ Mögliche Ursache
                 f"Der Ordner „{new_folder}“ existiert bereits.",
             )
             return
+        previous_meta = copy.deepcopy(self.meta)
         old_prefix = folder + FOLDER_SEP
         new_prefix = new_folder + FOLDER_SEP
         new_folders = set()
@@ -3294,10 +3546,13 @@ Mögliche Ursache
             if name.startswith(old_prefix):
                 ent["name"] = new_prefix + name[len(old_prefix):]
         self.meta["folders"] = sorted(new_folders, key=str.lower)
-        self._save_meta()
-        self.current_folder = new_folder
-        self.refresh_list()
-        show_toast(self, "Umbenannt", f"{folder} → {new_folder}")
+
+        def on_saved():
+            self.current_folder = new_folder
+            self.refresh_list(bool(self.search.text()))
+            show_toast(self, "Umbenannt", f"{folder} → {new_folder}")
+
+        self._save_meta(previous_meta, on_saved)
 
     def _delete_folder(self, folder: str):
         prefix = folder + FOLDER_SEP
@@ -3313,6 +3568,7 @@ Mögliche Ursache
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
+        previous_meta = copy.deepcopy(self.meta)
         parent = _folder_of(folder)
         for ent in self.meta.get("files", []):
             name = ent.get("name", "")
@@ -3324,48 +3580,83 @@ Mögliche Ursache
             if f != folder and not f.startswith(prefix)
         }
         self.meta["folders"] = sorted(folders, key=str.lower)
-        self._save_meta()
-        self.current_folder = parent
-        self.refresh_list()
-        show_toast(self, "Ordner gelöscht", folder)
 
-    def _save_meta(self):
+        def on_saved():
+            self.current_folder = parent
+            self.refresh_list(bool(self.search.text()))
+            show_toast(self, "Ordner gelöscht", folder)
+
+        self._save_meta(previous_meta, on_saved)
+
+    def _save_meta(self, previous_meta, on_success):
         """Schreibt ausschließlich die (verschlüsselte) Meta neu (keine Blob-Änderung).
 
-        Die Meta wird erst vollständig im Speicher verschlüsselt, BEVOR die Datei
-        verändert wird. Schlägt die Verschlüsselung fehl, bleibt der Container
-        unangetastet (die alte Meta bleibt erhalten).
+        Der atomare Austausch läuft im Hintergrund; bis zum Commit bleibt der
+        bisherige Container unverändert.
         """
-        try:
-            new_blob = encrypt_meta(self.meta, self.master_key)
-        except Exception as e:
-            self.append_log(f"FEHLER beim Verschlüsseln der Metadaten: {e}")
-            QMessageBox.critical(
-                self, "Fehler",
-                f"Metadaten konnten nicht verschlüsselt werden:\n{e}",
-            )
-            return
-        try:
-            with open(self.container_path, "rb+") as f:
-                f.seek(-META_LEN_SIZE, os.SEEK_END)
-                meta_len = struct.unpack("<Q", f.read(META_LEN_SIZE))[0]
-                meta_pos = os.path.getsize(self.container_path) - META_LEN_SIZE - meta_len
-                f.truncate(meta_pos)
-                f.seek(0, os.SEEK_END)
-                f.write(new_blob)
-                f.write(struct.pack("<Q", len(new_blob)))
-        except Exception as e:
-            self.append_log(f"FEHLER beim Speichern der Metadaten: {e}")
-            QMessageBox.critical(
-                self, "Fehler",
-                f"Metadaten konnten nicht gespeichert werden:\n{e}",
-            )
-            return
-        try:
-            self.meta = touch_container_meta(
-                self.meta, flags=self.flags, app_version=f"{edition} {version}"
-            )
-        except Exception:
-            pass
+        pending_meta = copy.deepcopy(self.meta)
+        self.meta = previous_meta
+        stop_event = threading.Event()
+        worker = MetadataSaveWorker(
+            self.container_path,
+            pending_meta,
+            self.master_key,
+            self.flags,
+            stop_event,
+        )
+        thread = QThread()
+        self._track_worker_thread(thread, stop_event)
+        worker.moveToThread(thread)
 
+        self._set_vault_actions_enabled(False)
+        self._set_views_enabled(False)
+        self.progress = QProgressDialog(
+            "Speichere Tresoränderung sicher...", "Abbrechen", 0, 100, self
+        )
+        self.progress.setWindowTitle(f"ANCORATE {edition}")
+        self.progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.progress.canceled.connect(stop_event.set)
+        worker.progress.connect(self._on_progress)
+        worker.finished.connect(
+            lambda new_meta: self._metadata_save_finished(
+                new_meta, thread, worker, on_success
+            )
+        )
+        worker.error.connect(
+            lambda error: self._metadata_save_error(
+                error, previous_meta, thread, worker
+            )
+        )
+        self.progress.show()
+        thread.started.connect(worker.run)
+        thread.start()
 
+    def _finish_metadata_save(self, thread, worker):
+        if self.progress is not None:
+            self.progress.close()
+            self.progress = None
+        thread.quit()
+        thread.wait()
+        worker.deleteLater()
+        thread.deleteLater()
+        self._release_worker_thread(thread)
+        self._set_views_enabled(bool(self.master_key))
+        self._set_vault_actions_enabled(bool(self.master_key))
+
+    def _metadata_save_finished(self, new_meta, thread, worker, on_success):
+        self.meta = new_meta
+        self._finish_metadata_save(thread, worker)
+        on_success()
+
+    def _metadata_save_error(self, error, previous_meta, thread, worker):
+        self.meta = previous_meta
+        self._finish_metadata_save(thread, worker)
+        error_msg = str(error) or repr(error)
+        self.append_log(f"FEHLER beim Speichern der Metadaten: {error_msg}")
+        if not self._close_after_workers:
+            QMessageBox.critical(
+                self,
+                "Fehler",
+                f"Metadaten konnten nicht gespeichert werden. "
+                f"Der Tresor blieb unverändert:\n{error_msg}",
+            )

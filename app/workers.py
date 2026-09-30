@@ -23,9 +23,12 @@ from encrypt import *
 
 # Utilities
 from utilities.container_ops import (
+    atomic_container_update,
     file_sha256,
     new_file_entry,
     replace_entry_in_container,
+    replace_container_with_backup,
+    save_container_metadata,
     touch_container_meta,
 )
 from utilities.settings import *
@@ -120,6 +123,7 @@ class DeleteWorker(QObject):
     def run(self):
         temp_path = None
         original = None
+        backup_path = None
         try:
             target = self.meta["files"][self.entry_index]
             offset = int(target["offset"])
@@ -184,14 +188,39 @@ class DeleteWorker(QObject):
             if self.stop_event.is_set():
                 raise RuntimeError("Vorgang abgebrochen")
             self.committing.emit()
-            os.replace(temp_path, self.container_path)
+            if os.name == "nt":
+                original.close()
+                original = None
+                backup_path = (
+                    self.container_path + ".anc-delete-" + secrets.token_hex(8)
+                )
+                replace_container_with_backup(
+                    temp_path, self.container_path, backup_path
+                )
+            else:
+                os.replace(temp_path, self.container_path)
             temp_path = None
 
             overwrite_error = ""
             try:
-                self._secure_overwrite(original, offset, length)
+                if backup_path is not None:
+                    with open(backup_path, "rb+") as old_container:
+                        self._secure_overwrite(old_container, offset, length)
+                else:
+                    self._secure_overwrite(original, offset, length)
             except Exception as error:
                 overwrite_error = str(error)
+            finally:
+                if backup_path is not None:
+                    try:
+                        os.remove(backup_path)
+                    except OSError as error:
+                        cleanup_error = f"Alte Tresorkopie konnte nicht entfernt werden: {error}"
+                        overwrite_error = (
+                            f"{overwrite_error}; {cleanup_error}"
+                            if overwrite_error
+                            else cleanup_error
+                        )
             self.finished.emit(name, new_meta, overwrite_error)
         except Exception as error:
             self.error.emit(str(error) or repr(error))
@@ -203,11 +232,17 @@ class DeleteWorker(QObject):
                     os.remove(temp_path)
                 except OSError:
                     pass
+            if backup_path and os.path.exists(backup_path):
+                try:
+                    os.remove(backup_path)
+                except OSError:
+                    pass
 
 
 
 class AddWorker(QObject):
     progress = pyqtSignal(int)
+    stage = pyqtSignal(str)
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
 
@@ -247,26 +282,19 @@ class AddWorker(QObject):
                 v2 = (v2 + b"\x00" * 32)[:32]
 
             added = []
+            added_paths = []
 
-            with open(self.container_path, "rb+") as f:
-                # Meta lesen
-                f.seek(-META_LEN_SIZE, os.SEEK_END)
-                meta_len_bytes = f.read(META_LEN_SIZE)
-                if len(meta_len_bytes) != META_LEN_SIZE:
-                    raise ValueError("Meta-Länge ungültig")
-                meta_len = struct.unpack("<Q", meta_len_bytes)[0]
+            self.stage.emit("Kopiere vorhandene Tresordaten sicher...")
 
-                meta_pos = (
-                    os.path.getsize(self.container_path) - META_LEN_SIZE - meta_len
-                )
-                f.seek(meta_pos)
-                meta_blob = f.read(meta_len)
-                if not meta_blob:
-                    raise ValueError("Meta-Blob konnte nicht gelesen werden+")
+            def copy_progress(progress_value):
+                self.progress.emit(min(20, int(progress_value / 5)))
 
-                # Meta entschlüsseln
-                meta = decrypt_meta(meta_blob, v2)
-
+            with atomic_container_update(
+                self.container_path,
+                v2,
+                progress_cb=copy_progress,
+                stop_event=self.stop_event,
+            ) as (f, meta):
                 # Container-Ebene der Metadaten aktualisieren
                 meta = touch_container_meta(
                     meta, flags=self.flags, app_version=f"{edition} {version}"
@@ -280,91 +308,75 @@ class AddWorker(QObject):
                     for part in parts:
                         p = f"{p}/{part}" if p else part
                         folders.add(p)
-                    meta["folders"] = sorted(folders, key=str.lower)
+                total = len(self.files)
+                for idx, filepath in enumerate(self.files, start=1):
+                    if self.stop_event and self.stop_event.is_set():
+                        raise RuntimeError("Vorgang abgebrochen")
 
-                # Datei ab hier kürzen, neuer Content wird angehängt
-                f.truncate(meta_pos)
-                f.seek(0, os.SEEK_END)
+                    if not os.path.isfile(filepath):
+                        continue
 
-                try:
-                    total = len(self.files)
-                    added_paths = []
-                    for idx, filepath in enumerate(self.files, start=1):
-                        if self.stop_event and self.stop_event.is_set():
-                            raise RuntimeError("Vorgang abgebrochen")
+                    offset = f.tell()
+                    name = os.path.basename(filepath)
+                    if self.folder:
+                        name = f"{self.folder}/{name}"
+                    size = os.path.getsize(filepath)
 
-                        if not os.path.isfile(filepath):
-                            continue
-
-                        offset = f.tell()
-                        name = os.path.basename(filepath)
-                        if self.folder:
-                            name = f"{self.folder}/{name}"
-                        size = os.path.getsize(filepath)
-
-                        # Progress-Callback
-                        def cb(progress_value):
-                            base = int(((idx - 1) / max(1, total)) * 100)
-                            self.progress.emit(
-                                min(100, base + int(progress_value / max(1, total)))
-                            )
-
-                        # Datei verschlüsseln und anhängen
-                        encrypt_file_to_blob(
-                            filepath, f, v2, filename=name, progress_cb=cb, stop_event=self.stop_event
+                    def cb(progress_value):
+                        fraction = ((idx - 1) + progress_value / 100) / max(
+                            1, total
                         )
+                        self.progress.emit(min(90, 20 + int(fraction * 70)))
 
-                        newpos = f.tell()
-                        blob_len = newpos - offset
-                        try:
-                            f_stat = os.stat(filepath)
-                            f_mtime = int(f_stat.st_mtime)
-                            f_created = int(f_stat.st_ctime)
-                        except OSError:
-                            f_mtime = None
-                            f_created = None
-                        entry = new_file_entry(
-                            name,
-                            size,
-                            offset,
-                            blob_len,
-                            mtime=f_mtime,
-                            created=f_created,
-                            added=int(time.time()),
-                            sha256=file_sha256(filepath),
-                        )
-                        meta["files"].append(entry)
-                        added.append(name)
-                        added_paths.append(filepath)
+                    encrypt_file_to_blob(
+                        filepath,
+                        f,
+                        v2,
+                        filename=name,
+                        progress_cb=cb,
+                        stop_event=self.stop_event,
+                    )
 
-                    # Meta verschlüsseln und ans Ende schreiben
-                    meta_enc = encrypt_meta(meta, v2)
-                    f.write(meta_enc)
-                    f.write(struct.pack("<Q", len(meta_enc)))
-
-                except Exception:
-                    # Wen etwas schief läuft (z.B. Abbruch, Fehler), die alten
-                    # Metadaten wiederherstellen, damit der Tresor lesbar bleibt.
+                    newpos = f.tell()
+                    blob_len = newpos - offset
+                    self.stage.emit(f"Prüfe Datei {idx} von {total}...")
                     try:
-                        f.truncate(meta_pos)
-                        f.seek(0, os.SEEK_END)
-                        f.write(meta_blob)
-                        f.write(meta_len_bytes)
-                        f.flush()
-                        os.fsync(f.fileno())
-                    except Exception:
-                        pass
-                    raise
+                        f_stat = os.stat(filepath)
+                        f_mtime = int(f_stat.st_mtime)
+                        f_created = int(f_stat.st_ctime)
+                    except OSError:
+                        f_mtime = None
+                        f_created = None
+                    entry = new_file_entry(
+                        name,
+                        size,
+                        offset,
+                        blob_len,
+                        mtime=f_mtime,
+                        created=f_created,
+                        added=int(time.time()),
+                        sha256=file_sha256(filepath),
+                    )
+                    meta["files"].append(entry)
+                    added.append(name)
+                    added_paths.append(filepath)
+
+                self.stage.emit("Schreibe Tresor sicher...")
+                meta_enc = encrypt_meta(meta, v2)
+                f.write(meta_enc)
+                f.write(struct.pack("<Q", len(meta_enc)))
 
             # Einstellungen neu laden für aktuellen del_source_added Status
             current_settings = load_settings()
             if current_settings.get("del_source_added"):
+                self.stage.emit("Lösche Quelldateien sicher...")
                 # Nur die tatsächlich erfolgreich verschlüsselten Quelldateien
                 # mit der konfigurierten Löschmethode sicher vernichten.
                 method = current_settings.get("deletion_method", "Standard")
                 for file in added_paths:
                     _secure_delete_plaintext(file, method)
 
+            self.progress.emit(100)
             self.finished.emit(added)
 
         except Exception as e:
@@ -373,6 +385,43 @@ class AddWorker(QObject):
             print(f"[DEBUG] Worker error: {error_msg}")
             print(f"[DEBUG] Exception type: {type(e).__name__}")
             self.error.emit(error_msg)
+
+
+class MetadataSaveWorker(QObject):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        container_path: str,
+        meta: dict,
+        master_key: bytes,
+        flags: int,
+        stop_event: threading.Event,
+    ):
+        super().__init__()
+        self.container_path = container_path
+        self.meta = meta
+        self.master_key = master_key
+        self.flags = flags
+        self.stop_event = stop_event
+
+    def run(self):
+        try:
+            new_meta = touch_container_meta(
+                self.meta, flags=self.flags, app_version=f"{edition} {version}"
+            )
+            save_container_metadata(
+                self.container_path,
+                new_meta,
+                self.master_key,
+                stop_event=self.stop_event,
+            )
+            self.progress.emit(100)
+            self.finished.emit(new_meta)
+        except Exception as error:
+            self.error.emit(str(error) or repr(error))
 
 
 class ExportWorker(QObject):

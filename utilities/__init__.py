@@ -4,6 +4,11 @@
 import os
 import platform
 
+# Bild-Assets liegen gebuendelt unter utilities/assets. Die Icons der
+# Oberflaeche (SVG-Glyphs) sind davon getrennt unter assets/ui.
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "assets")
+
 
 def get_app_icon():
     """
@@ -12,20 +17,20 @@ def get_app_icon():
     from PyQt6.QtGui import QIcon
 
     system = platform.system()
+    icon_dir = os.path.join(ASSETS_DIR, "app")
     icon_paths = []
-    base_dir = os.path.dirname(os.path.abspath(__file__))
 
     if system == "Windows":
         icon_paths = [
-            os.path.join(base_dir, "icon.ico"),
-            os.path.join(base_dir, "icon.png"),
+            os.path.join(icon_dir, "icon.ico"),
+            os.path.join(icon_dir, "icon.png"),
         ]
     else:
         icon_paths = [
-            os.path.join(base_dir, "icon.png"),
-            os.path.join(base_dir, "icon_64x64.png"),
-            os.path.join(base_dir, "icon_48x48.png"),
-            os.path.join(base_dir, "icon_32x32.png"),
+            os.path.join(icon_dir, "icon.png"),
+            os.path.join(icon_dir, "icon_64x64.png"),
+            os.path.join(icon_dir, "icon_48x48.png"),
+            os.path.join(icon_dir, "icon_32x32.png"),
         ]
 
     for path in icon_paths:
