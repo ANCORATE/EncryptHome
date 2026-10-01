@@ -1589,6 +1589,8 @@ Mögliche Ursache
                 self, "Info", "Schließe zuerst die laufende In-Tresor-Bearbeitung ab."
             )
             return
+        if self._delete_in_progress:
+            return
         if not self.container_path:
             QMessageBox.warning(self, "Fehler", "Keine Tresordatei geöffnet.")
             return
@@ -1627,53 +1629,40 @@ Mögliche Ursache
         try:
             self.append_log(f"Vernichtung gestartet (Modus: {method})...")
 
-            # Fortschrittsdialog für das (ggf. lange) sichere Überschreiben
+            delete_stop_event = threading.Event()
+            self._delete_in_progress = True
+            self._delete_committing = False
+            self._set_vault_actions_enabled(False)
+            self._set_views_enabled(False)
+
+            worker = DeleteContainerWorker(c_path, method, delete_stop_event)
+            thread = QThread()
+            self._track_worker_thread(thread, delete_stop_event)
+            worker.moveToThread(thread)
+
             self.progress = QProgressDialog(
-                f"Vernichte Tresor mit '{method}'...", None, 0, 100, self
+                f"Vernichte Tresor mit '{method}'...", "Abbrechen", 0, 100, self
             )
             self.progress.setWindowTitle(f"ANCORATE {edition}")
             self.progress.setValue(0)
+            self.progress.canceled.connect(delete_stop_event.set)
             self.progress.show()
 
-            # 3. Physisches Überschreiben (Die gesamte Datei, aber den
-            #    Header überspringen, damit der Tresor lesbar bleibt, falls
-            #    der Vorgang unterbrochen wird)
-            try:
-                file_size = os.path.getsize(c_path)
-                with open(c_path, "rb+") as fh:
-                    # Header überspringen, um Container im Notfall noch lesen zu können
-                    data_offset = HEADER_LEN
-                    data_length = file_size - data_offset
-                    if data_length > 0:
-                        self._secure_overwrite(fh, data_offset, data_length)
-            finally:
-                try:
-                    self.progress.close()
-                except Exception:
-                    pass
-                self.progress = None
-
-            # 4. Datei vom Dateisystem entfernen
-            os.remove(c_path)
-
-            # 5. UI Aufräumen
-            self.update_container_path()
-
-            self.meta = {"files": []}
-            # Passwort-Änderungs-Zustandsvariablen
-            self.changing_password = False
-            self.password_change_in_progress = False
-
-            self.refresh_list()
-            self.append_log(f"Tresor mit {method} erfolgreich vernichtet.")
-
-            show_toast(
-                self,
-                "Erfolg",
-                f"Der Tresor wurde mit {method} sicher gelöscht.",
+            worker.progress.connect(self._on_progress)
+            worker.finished.connect(
+                lambda path, mth: self._delete_container_finished(path, mth, thread, worker)
             )
+            worker.error.connect(
+                lambda error: self._delete_container_error(error, thread, worker, delete_stop_event)
+            )
+            thread.started.connect(worker.run)
+            thread.start()
 
         except Exception as e:
+            self._delete_in_progress = False
+            self._delete_committing = False
+            self._set_views_enabled(bool(self.master_key))
+            self._set_vault_actions_enabled(bool(self.master_key))
             self.append_log(f"Fehler: {str(e)}")
             QMessageBox.critical(
                 self, "Kritischer Fehler", f"Löschvorgang fehlgeschlagen: {e}"
@@ -2503,31 +2492,6 @@ Mögliche Ursache
         else:
             QMessageBox.information(self, "Export fertig", "Keine Dateien exportiert.")
 
-    def _secure_overwrite(self, file_handle, offset, length, stop_event=None):
-        method = self.data.get("deletion_method", "Standard")
-        passes = _deletion_passes(method)
-        total_work = max(1, length * passes)
-        total_written = 0
-        chunk_size = 1024 * 1024
-
-        for _ in range(passes):
-            if stop_event and stop_event.is_set():
-                raise RuntimeError("Vorgang abgebrochen")
-            file_handle.seek(offset)
-            bytes_left = length
-            while bytes_left > 0:
-                if stop_event and stop_event.is_set():
-                    raise RuntimeError("Vorgang abgebrochen")
-                current_chunk = min(bytes_left, chunk_size)
-                file_handle.write(secrets.token_bytes(current_chunk))
-                bytes_left -= current_chunk
-                total_written += current_chunk
-                if self.progress:
-                    self.progress.setValue(int(total_written / total_work * 100))
-                QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
-            file_handle.flush()
-            os.fsync(file_handle.fileno())
-
     def delete_selected(self):
         if self._delete_in_progress:
             return
@@ -2654,6 +2618,37 @@ Mögliche Ursache
         else:
             self.append_log(f"FEHLER beim Löschen: {error}")
             QMessageBox.critical(self, "Kritischer Fehler", f"Löschvorgang abgebrochen: {error}")
+        if self._delete_close_after:
+            self._delete_close_after = False
+            self.close()
+
+    def _delete_container_finished(self, path, method, thread, worker):
+        self._finish_delete_operation(thread, worker)
+        self.update_container_path()
+        self.meta = {"files": []}
+        self.changing_password = False
+        self.password_change_in_progress = False
+        self.refresh_list()
+        self.append_log(f"Tresor mit {method} erfolgreich vernichtet.")
+        show_toast(
+            self,
+            "Erfolg",
+            f"Der Tresor wurde mit {method} sicher gelöscht.",
+        )
+        if self._delete_close_after:
+            self._delete_close_after = False
+            self.close()
+
+    def _delete_container_error(self, error, thread, worker, stop_event):
+        self._finish_delete_operation(thread, worker)
+        if stop_event.is_set():
+            self.append_log("Löschvorgang des Tresors abgebrochen")
+            show_toast(self, "Abgebrochen", "Löschvorgang abgebrochen.")
+        else:
+            self.append_log(f"Fehler: {error}")
+            QMessageBox.critical(
+                self, "Kritischer Fehler", f"Löschvorgang fehlgeschlagen: {error}"
+            )
         if self._delete_close_after:
             self._delete_close_after = False
             self.close()

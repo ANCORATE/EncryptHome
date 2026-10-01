@@ -240,6 +240,73 @@ class DeleteWorker(QObject):
 
 
 
+class DeleteContainerWorker(QObject):
+    """Sicheres Vernichten eines gesamten Tresors im Hintergrund."""
+
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(str, str)
+    error = pyqtSignal(str)
+
+    def __init__(self, container_path, method, stop_event):
+        super().__init__()
+        self.container_path = container_path
+        self.method = method
+        self.stop_event = stop_event
+
+    def _secure_overwrite_data(self, file_handle, offset, length):
+        passes = _deletion_passes(self.method)
+        chunk_size = 1024 * 1024
+        # Fortschritt pro abgeschlossenem Pass: Bei 300 Durchgaengen und einem
+        # Byte-basierten Anteil bleibt der Balken ueber Tausende Chunks bei 0 %
+        # stehen und wirkt wie ein Haenger.
+        for pass_index in range(passes):
+            if self.stop_event.is_set():
+                raise RuntimeError("Vorgang abgebrochen")
+            file_handle.seek(offset)
+            bytes_left = length
+            while bytes_left > 0:
+                if self.stop_event.is_set():
+                    raise RuntimeError("Vorgang abgebrochen")
+                current_chunk = min(bytes_left, chunk_size)
+                file_handle.write(secrets.token_bytes(current_chunk))
+                bytes_left -= current_chunk
+            file_handle.flush()
+            os.fsync(file_handle.fileno())
+            # Letzter Pass auf 99 % begrenzt, das Entfernen der Datei ist der
+            # letzte Schritt und wird separat gemeldet.
+            self.progress.emit(
+                max(0, min(99, int((pass_index + 1) / passes * 99)))
+            )
+
+    def run(self):
+        c_path = self.container_path
+        try:
+            if not c_path or not os.path.exists(c_path):
+                raise ValueError("Tresor nicht gefunden.")
+            if self.stop_event.is_set():
+                raise RuntimeError("Vorgang abgebrochen")
+
+            file_size = os.path.getsize(c_path)
+            if file_size > HEADER_LEN:
+                with open(c_path, "rb+") as fh:
+                    data_offset = HEADER_LEN
+                    data_length = file_size - data_offset
+                    if data_length > 0:
+                        self._secure_overwrite_data(fh, data_offset, data_length)
+            else:
+                # Sehr kleiner Container ohne Datenbereich
+                pass
+
+            if self.stop_event.is_set():
+                raise RuntimeError("Vorgang abgebrochen")
+
+            os.remove(c_path)
+            self.finished.emit(c_path, self.method)
+        except Exception as error:
+            self.error.emit(str(error) or repr(error))
+
+
+
 class AddWorker(QObject):
     progress = pyqtSignal(int)
     stage = pyqtSignal(str)
