@@ -845,7 +845,7 @@ class App(QMainWindow):
             action.triggered.connect(lambda _=False, p=path: self._open_recent_vault(p))
             added = True
         if not added:
-            empty = menu.addAction("Keine kürzlichen Container gefunden")
+            empty = menu.addAction("Keine kürzlich genutzten Container gefunden")
             empty.setEnabled(False)
         menu.addSeparator()
         clear = menu.addAction("Liste löschen")
@@ -868,6 +868,11 @@ class App(QMainWindow):
             self.container_path = path
             self.open_container()
         else:
+            # Verwaisten Eintrag entfernen (z. B. extern oder per Notfall-Löschung
+            # gelöscht), damit die Liste nicht auf nicht existierende Tresore zeigt.
+            remove_recent_container(path)
+            if hasattr(self, "recent_menu"):
+                self._refresh_recent_submenu()
             QMessageBox.warning(self, "Fehler", "Container existiert nicht mehr.")
 
 
@@ -2611,8 +2616,13 @@ Mögliche Ursache
             self.close()
 
     def _delete_error(self, error, thread, worker, stop_event):
+        # Status VOR dem Teardown lesen: _finish_delete_operation() schliesst den
+        # QProgressDialog, dessen close() canceled() emittiert und damit den
+        # stop_event setzt. Nach dem Teardown waere also jeder echte Fehler als
+        # Nutzerabbruch getarnt.
+        aborted = stop_event.is_set()
         self._finish_delete_operation(thread, worker)
-        if stop_event.is_set():
+        if aborted:
             self.append_log("Löschvorgang abgebrochen")
             show_toast(self, "Abgebrochen", "Löschvorgang abgebrochen.")
         else:
@@ -2624,6 +2634,9 @@ Mögliche Ursache
 
     def _delete_container_finished(self, path, method, thread, worker):
         self._finish_delete_operation(thread, worker)
+        remove_recent_container(path)
+        if hasattr(self, "recent_menu"):
+            self._refresh_recent_submenu()
         self.update_container_path()
         self.meta = {"files": []}
         self.changing_password = False
@@ -2640,8 +2653,12 @@ Mögliche Ursache
             self.close()
 
     def _delete_container_error(self, error, thread, worker, stop_event):
+        # Status VOR dem Teardown lesen (siehe _delete_error): das Schliessen
+        # des Dialogs setzt selbst den stop_event und wuerde echte Fehler
+        # als Nutzerabbruch tarnen.
+        aborted = stop_event.is_set()
         self._finish_delete_operation(thread, worker)
-        if stop_event.is_set():
+        if aborted:
             self.append_log("Löschvorgang des Tresors abgebrochen")
             show_toast(self, "Abgebrochen", "Löschvorgang abgebrochen.")
         else:

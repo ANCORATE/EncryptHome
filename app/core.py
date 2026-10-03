@@ -536,6 +536,33 @@ def add_recent_container(container_path: str):
     except Exception as e:
         print(f"[ERROR] Failed to add recent container: {e}")
 
+
+def remove_recent_container(container_path: str):
+    """Remove a single entry from the recent list (e.g. after destruction)."""
+    try:
+        if not container_path:
+            return
+        target = os.path.normcase(os.path.abspath(container_path))
+        containers = load_recent_containers()
+        if not isinstance(containers, list):
+            return
+
+        kept = []
+        removed = False
+        for entry in containers:
+            path = entry.get("path") if isinstance(entry, dict) else None
+            if isinstance(path, str) and os.path.normcase(
+                os.path.abspath(path)
+            ) == target:
+                removed = True
+                continue
+            kept.append(entry)
+
+        if removed:
+            save_recent_containers(kept)
+    except Exception as e:
+        print(f"[ERROR] Failed to remove recent container: {e}")
+
 def rekey_container_password(
     container_path: str,
     current_meta: dict,

@@ -206,6 +206,7 @@ class SaltScannerUI(QWidget):
                     if os.path.exists(path):
                         os.remove(path)
                         deleted += 1
+                        self._drop_recent_entry(path)
                     # Update progress
                     QTimer.singleShot(0, lambda d=deleted, t=total: self._update_delete_progress(d, t))
                     time.sleep(0.05)  # Small delay to prevent UI blocking
@@ -218,6 +219,14 @@ class SaltScannerUI(QWidget):
         # Start deletion in background thread
         threading.Thread(target=delete_worker, daemon=True).start()
     
+    def _drop_recent_entry(self, path):
+        """Entfernt einen gelöschten Tresor aus der Liste zuletzt verwendeter Container."""
+        try:
+            from app.core import remove_recent_container
+            remove_recent_container(path)
+        except Exception:
+            pass
+
     def _update_delete_progress(self, deleted, total):
         if self._deleting:
             self.status_label.setText(f"Lösche Tresore... {deleted}/{total} gelöscht")
