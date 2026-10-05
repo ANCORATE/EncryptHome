@@ -6,9 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import app.core
 from app.core import HEADER_LEN, META_LEN_SIZE, SALT_LEN, write_header
-from app.workers import AddWorker, DeleteWorker, MetadataSaveWorker
+from app.workers import AddWorker, DeleteWorker
 from decrypt import decrypt_blob_range, decrypt_meta
 from encrypt import encrypt_file_to_blob, encrypt_meta
 from utilities.container_ops import (

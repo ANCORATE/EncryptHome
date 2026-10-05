@@ -10,16 +10,15 @@ Elemente. Bewusst ohne Urteil, nur Messwerte.
 import os
 import sys
 
-ROOT = r"C:\Users\samue\OneDrive\Desktop\EncryptHome"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-os.environ.setdefault("QT_QPA_PLATFORM", "windows")
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from app.main_window import App  # noqa: E402
-from utilities.theme_engine import (build_stylesheet,  # noqa: E402
-                                    resolve_palette)
+from utilities.theme_engine import resolve_palette  # noqa: E402
 
 app = QApplication.instance() or QApplication(sys.argv)
 win = App()
@@ -118,14 +117,17 @@ def rgb(hx):
     return tuple(int(hx[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def flat(hx):
-    """rgba(...)-Werte auf eine opake Naeherung bringen."""
+def flat(hx, background):
+    """Composites an RGBA-Farben ueber einen opaken Hintergrund."""
     hx = hx.strip()
     if hx.startswith("rgba"):
         nums = hx[hx.find("(") + 1:hx.find(")")].split(",")
         r, g, b = (int(float(n)) for n in nums[:3])
-        a = float(nums[3]) if len(nums) > 3 else 1.0
-        return tuple(round(c + (0x0b0f16 if True else 0) * 0) for c in (r, g, b))
+        alpha = max(0.0, min(1.0, float(nums[3])))
+        return tuple(
+            round(channel * alpha + base * (1 - alpha))
+            for channel, base in zip((r, g, b), background)
+        )
     return rgb(hx)
 
 
@@ -154,9 +156,12 @@ for theme in ("Standard-dark", "Standard-White", "High-Contrast",
     ]
     print(f"\n  {theme}  bg={p['bg']} surface={surf} "
           f"accent={p['accent']} on-soft={p['on-soft']}")
+    base = rgb(p["bg"])
     for label, fg, bgc in tests:
         try:
-            r = ratio(flat(fg), flat(bgc))
+            background = flat(bgc, base)
+            foreground = flat(fg, background)
+            r = ratio(foreground, background)
         except Exception as exc:  # pragma: no cover
             print(f"    {label:26} UNLESBAR {fg} ({exc})")
             continue

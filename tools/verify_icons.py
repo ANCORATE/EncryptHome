@@ -18,7 +18,7 @@ import os
 import sys
 
 from PyQt6.QtCore import QSize
-from PyQt6.QtGui import QColor, QIcon, QImage
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

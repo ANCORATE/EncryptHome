@@ -211,24 +211,6 @@ def ensure_config_dir():
     os.makedirs(d, exist_ok=True)
 
 
-def _secure_zero_bytes(data):
-    """Attempt to zero out sensitive bytes in memory.
-
-    Python doesn't guarantee immediate deallocation, but overwriting
-    the bytearray contents reduces the window during which the key
-    remains in process memory.
-    """
-    if isinstance(data, (bytes, bytearray)):
-        try:
-            ba = bytearray(data)
-            for i in range(len(ba)):
-                ba[i] = 0
-            return ba
-        except Exception:
-            pass
-    return None
-
-
 def _secure_delete_file(path: str, passes: int = 3):
     """Überschreibt eine Datei mehrfach mit Zufallsdaten und löscht sie dann.
 
@@ -590,10 +572,12 @@ def rekey_container_password(
     new_meta = dict(current_meta)
     new_meta["flags"] = current_flags
     
-    # Read old salt from container for decryption
+    # Parse the current header before beginning the re-encryption work.
     with open(container_path, "rb") as source:
         header = source.read(HEADER_LEN)
-        magic, version, flags, old_salt, _reserved = struct.unpack(HEADER_FMT, header)
+        _magic, _version, _flags, _old_salt, _reserved = struct.unpack(
+            HEADER_FMT, header
+        )
     
     # Derive old master key for decryption
     # Note: We need the old password to derive the old master key

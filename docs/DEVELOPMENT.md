@@ -108,24 +108,9 @@ python main.py
 
 ## Project Structure
 
-```
-EncryptHome/
-├── main.py                 # Main application and GUI
-├── base.py                 # Cryptographic foundation
-├── encrypt.py              # Encryption operations
-├── decrypt.py              # Decryption operations
-├── decrypt_preview.py      # Preview system
-├── utilities/
-│   ├── settings.py         # Settings management
-│   ├── header_utils.py     # Header utilities
-│   ├── checksum_check.py   # Integrity verification
-│   ├── sos_delete.py       # Emergency vault scanner/wiper
-│   ├── updater.py          # Update mechanism
-│   └── themes/             # Central Qt stylesheets (standard-dark.css / standard-white.css)
-├── docs/                   # Documentation
-├── AGENTS.md              # Development guidelines
-└── README.md              # Project readme
-```
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the current module map. `main.py` is the entry point and keeps
+compatibility re-exports; application modules live under `app/`, cryptographic operations remain in the
+top-level modules, and shared helpers live under `utilities/`.
 
 ## Building from Source
 
@@ -147,39 +132,13 @@ For creating distributable executables, use PyInstaller:
 pip install pyinstaller
 ```
 
-#### 2. Use the Project Spec File
+#### 2. PyInstaller Configuration
 
-The repository ships a ready-made spec file (`ANCORATE_EncryptHome_26.2_Build_0009.spec`). It bundles the
-application together with `utilities/`, `docs/`, `TOS.txt` and `README.md`, and declares the
-required hidden imports (PyQt6, cryptography, argon2, requests, sqlite3, fitz):
+This checkout does not contain a project-maintained PyInstaller `.spec` file. The previously documented
+`ANCORATE_EncryptHome_26.2_Build_0009.spec` build path is unavailable; add and verify a platform-appropriate
+spec file before documenting or relying on a production PyInstaller build command.
 
-```python
-a = Analysis(
-    ['main.py'],
-    pathex=[],
-    binaries=[],
-    datas=[('utilities', 'utilities'), ('docs', 'docs'),
-           ('TOS.txt', '.'), ('README.md', '.')],
-    hiddenimports=['PyQt6', 'PyQt6.QtCore', 'PyQt6.QtWidgets', 'PyQt6.QtGui', 'cryptography',
-                   'argon2', 'requests', 'sqlite3', 'fitz'],
-    ...
-)
-exe = EXE(
-    pyz,
-    a.scripts, a.binaries, a.zipfiles, a.datas, [],
-    name='ANCORATE_EncryptHome_26.2_Build_0009',
-    console=False,
-    icon=['utilities\\assets\\app\\icon.ico'],
-)
-```
-
-#### 3. Build Executable
-
-```bash
-pyinstaller ANCORATE_EncryptHome_26.2_Build_0009.spec
-```
-
-#### 4. Platform-Specific Considerations
+#### 3. Platform-Specific Considerations
 
 **Windows:**
 - Icon: `.ico` format

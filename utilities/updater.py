@@ -15,7 +15,6 @@ import requests
 # ---------------------------------------------------------------
 # Versionsvergleich (zentral, robust)
 # ---------------------------------------------------------------
-_RELEASE_TOKEN = 0
 _PRERELEASE_ORDER = {
     "alpha": -3,
     "a": -3,

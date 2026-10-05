@@ -31,10 +31,6 @@ DENSITY = {
 }
 DEFAULT_DENSITY = "Mittel"
 
-# Token-Keys, die bei einer benutzerdefinierten Akzentfarbe neu berechnet werden.
-_ACCENT_DERIVED = ("accent", "accent-hover", "accent-pressed", "accent-soft",
-                   "accent-focus", "link")
-
 PALETTES = {
     "Standard-dark": {
         "bg": "#0b0f16",
@@ -128,8 +124,6 @@ PALETTES = {
         "menu-selected": "#dbe7ff",
         "req-ok": "#16a34a",
         "welcome-title": "#2f7cf6",
-        "item-hover": "rgba(0,0,0,0.04)",
-        "menu-sep": "#d0d6e0",
         "border-dialog": "rgba(0,0,0,0.12)",
     },
     "High-Contrast": {

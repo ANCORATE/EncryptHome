@@ -17,9 +17,6 @@
 #    - app/dialogs.py        Dialoge + Widgets
 #    - app/main_window.py    Hauptfenster (App)
 #
-# Alle Symbole werden hier re-exportiert, damit bestehende
-# Importe (z. B. "from main import ...") unveraendert funktionieren.
-#
 
 from app.core import *
 from app.passwords import *

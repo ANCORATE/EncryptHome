@@ -293,9 +293,6 @@ class DeleteContainerWorker(QObject):
                     data_length = file_size - data_offset
                     if data_length > 0:
                         self._secure_overwrite_data(fh, data_offset, data_length)
-            else:
-                # Sehr kleiner Container ohne Datenbereich
-                pass
 
             if self.stop_event.is_set():
                 raise RuntimeError("Vorgang abgebrochen")

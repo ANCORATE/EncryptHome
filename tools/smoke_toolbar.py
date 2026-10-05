@@ -13,7 +13,7 @@ import sys
 
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QFontDatabase
-from PyQt6.QtWidgets import QApplication, QToolBar, QToolButton
+from PyQt6.QtWidgets import QApplication, QToolButton
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)

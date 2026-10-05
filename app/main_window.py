@@ -46,10 +46,8 @@ from utilities.ui_icons import (
 )
 
 from app.core import *
-from app.core import _secure_zero_bytes
 from app.passwords import *
 from app.workers import *
-from app.workers import _deletion_passes
 from app.dialogs import *
 from app.power_lock import PowerLockMonitor
 
@@ -1712,9 +1710,7 @@ Mögliche Ursache
             pass
 
         self.pwd = ""
-        # Attempt to zero sensitive key material from memory
-        if self.master_key is not None:
-            _secure_zero_bytes(self.master_key)
+        # Python bytes are immutable; release the application's key reference.
         self.master_key = None
         self.meta = {"files": []}
         # Passwort-Änderungs-Zustandsvariablen
@@ -2828,13 +2824,9 @@ Mögliche Ursache
 
         event.accept()
 
-        # Letzten sensiblen Schlüssel aus dem Speicher entfernen (Best effort).
-        try:
-            if getattr(self, "master_key", None):
-                _secure_zero_bytes(self.master_key)
-                self.master_key = None
-        except Exception:
-            pass
+        # Python bytes are immutable; release any remaining application reference.
+        if getattr(self, "master_key", None) is not None:
+            self.master_key = None
 
     # ------------------ Worker Callbacks ------------------
     def _on_progress(self, v):
