@@ -262,7 +262,6 @@ def get_password_with_requirements(parent, title="Passwort eingeben") -> tuple[s
     # Update requirements display as user types
     def update_requirements():
         password = pwd_input.text()
-        is_valid, error_msg = validate_password_strength(password)
         
         # Update visual indicators
         _set_requirement_label(req_widgets["length"], len(password) >= 8)

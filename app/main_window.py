@@ -360,7 +360,7 @@ class App(QMainWindow):
     def _container_worker_active(self):
         return any(
             container_operation
-            for _stop_event, container_operation in self._worker_threads.values()
+            for _, container_operation in self._worker_threads.values()
         )
 
     def _ensure_container_idle(self):

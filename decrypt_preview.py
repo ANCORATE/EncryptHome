@@ -249,7 +249,7 @@ def _decode_text(data: bytes) -> tuple[str, str]:
     # UTF-8; ungültige Bytes werden ersetzt, damit nie Text verloren geht.
     try:
         return data.decode("utf-8"), "utf-8"
-    except Exception:
+    except UnicodeDecodeError:
         return data.decode("utf-8", errors="replace"), "utf-8 (replace)"
 
 
@@ -285,20 +285,18 @@ class PreviewDialog(QDialog):
             if not self._build_pdf(layout, data):
                 self._build_binary(
                     layout,
-                    data,
                     hint="PDF-Vorschau ist in dieser Installation nicht verfügbar. Bitte setze dich mit dem Support in Verbindung.",
                 )
         elif kind == "video":
             if not self._build_video(layout, data, filename):
                 self._build_binary(
                     layout,
-                    data,
                     hint="Video-Vorschau ist in dieser Installation nicht verfügbar. Bitte setze dich mit dem Support in Verbindung.",
                 )
         elif kind == "text":
             self._build_text(layout, data)
         else:
-            self._build_binary(layout, data)
+            self._build_binary(layout)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
@@ -326,7 +324,7 @@ class PreviewDialog(QDialog):
     def _build_image(self, layout: QVBoxLayout, data: bytes):
         pix = QPixmap()
         if not pix.loadFromData(data):
-            self._build_binary(layout, data, hint="Bild konnte nicht dekodiert werden.")
+            self._build_binary(layout, hint="Bild konnte nicht dekodiert werden.")
             return
         self._setup_zoomable_pixmap(layout, pix)
 
@@ -632,7 +630,7 @@ class PreviewDialog(QDialog):
                 pass
         threading.Thread(target=cleanup, daemon=True).start()
 
-    def _build_binary(self, layout: QVBoxLayout, data: bytes, hint: str = ""):
+    def _build_binary(self, layout: QVBoxLayout, hint: str = ""):
         text = (
             hint
             if hint

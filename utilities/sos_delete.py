@@ -201,7 +201,7 @@ class SaltScannerUI(QWidget):
             deleted = 0
             total = len(paths_to_delete)
             
-            for i, path in enumerate(paths_to_delete):
+            for path in paths_to_delete:
                 try:
                     if os.path.exists(path):
                         os.remove(path)
@@ -214,7 +214,7 @@ class SaltScannerUI(QWidget):
                     pass
             
             # Complete deletion
-            QTimer.singleShot(0, lambda: self._delete_complete(deleted, total))
+            QTimer.singleShot(0, lambda: self._delete_complete(deleted))
         
         # Start deletion in background thread
         threading.Thread(target=delete_worker, daemon=True).start()
@@ -231,7 +231,7 @@ class SaltScannerUI(QWidget):
         if self._deleting:
             self.status_label.setText(f"Lösche Tresore... {deleted}/{total} gelöscht")
     
-    def _delete_complete(self, deleted, total):
+    def _delete_complete(self, deleted):
         self.list_widget.clear()
         self.status_label.setText(f"{deleted} Tresore unwiderruflich gelöscht")
         self.scan_button.setEnabled(True)
