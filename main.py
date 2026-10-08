@@ -9,7 +9,7 @@
 # ============================================================
 # Einstiegspunkt
 # ============================================================
-# main.py bleibt der Einstiegspunkt. Der gesamte Code wurde in
+# main.py ist der Einstiegspunkt. Der gesamte Code wurde in
 # das app-Paket mit logisch sortierten Modulen aufgeteilt:
 #    - app/core.py           Konstanten + Standalone-Helfer
 #    - app/passwords.py      Passwort-Dialoge
