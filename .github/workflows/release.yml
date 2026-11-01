@@ -54,17 +54,16 @@ jobs:
       - name: Build executable
         shell: bash
         run: |
-          ICON_ARG=""
+          args=(--noconfirm --windowed --onefile --name EncryptHome main.py)
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            ICON_ARG='--icon "utilities/assets/app/icon.ico"'
+            args+=(--icon utilities/assets/app/icon.ico)
           fi
-          pyinstaller --noconfirm --windowed --onefile --name EncryptHome main.py \
-            $ICON_ARG \
-            --collect-all PyQt6 \
-            --add-data "utilities${{ matrix.sep }}utilities" \
-            --add-data "docs${{ matrix.sep }}docs" \
-            --add-data "TOS.txt${{ matrix.sep }}." \
-            --add-data "README.md${{ matrix.sep }}."
+          args+=(--collect-all PyQt6)
+          args+=(--add-data "utilities${{ matrix.sep }}utilities")
+          args+=(--add-data "docs${{ matrix.sep }}docs")
+          args+=(--add-data "TOS.txt${{ matrix.sep }}.")
+          args+=(--add-data "README.md${{ matrix.sep }}.")
+          pyinstaller "${args[@]}"
 
       - name: Prepare artifact
         shell: bash
