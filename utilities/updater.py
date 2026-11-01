@@ -358,6 +358,7 @@ class EncryptHomeUpdater:
             "sha256": None,
             "size_mb": None,
             "published_at": data.get("published_at"),
+            "changelog": data.get("body") or data.get("name") or "",
         }
 
     def fetch_manifest(self, timeout: int = 8) -> dict:
