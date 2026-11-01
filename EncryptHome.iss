@@ -12,9 +12,9 @@
 ;   3. Inno Setup auf diese Datei ausfuehren -> dist\setup_output\*.exe
 
 #define MyAppName "ANCORATE EncryptHome"
-#define MyAppVersion "27 Beta 1"
-#define MyAppPublisher "ANCORATE software"
-#define MyAppExeName "ANCORATE_EncryptHome_27_Beta_1.exe"
+#define MyAppVersion "27.0.1-beta"
+#define MyAppPublisher "ANCORATE"
+#define MyAppExeName "EncryptHome.exe"
 #define MyAppAssocName "ANCORATE Secure Authentication Layer Technology File"
 #define MyAppAssocExt ".salt"
 #define MyAppAssocKey StringChange(MyAppAssocName, " ", "") + MyAppAssocExt
@@ -46,7 +46,7 @@ InfoAfterFile=Installation erfolgreich abgeschlos.txt
 ;PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=dist\setup_output
-OutputBaseFilename=ANCORATE_EncryptHome_27_Beta_1_Setup
+OutputBaseFilename=EncryptHome-Setup
 SetupIconFile=utilities\assets\app\icon.ico
 SolidCompression=yes
 WizardStyle=modern dynamic windows11
