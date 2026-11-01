@@ -70,6 +70,7 @@ DEFAULT_SETTINGS = {
     "list_sort": "Keine",  # Keine, Name
     # --- Updater (alte Defaults) ---
     "update_url": UPDATE_URL,
+    "update_channel": "stable",
     # --- NEU: System & Verhalten ---
     "confirm_exit": True,
     "del_source_added": False,
@@ -527,17 +528,27 @@ class ChangelogWorker(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
 
+    def __init__(self, channel: str = "stable"):
+        super().__init__()
+        self.channel = (channel or "stable").lower()
+
     def run(self):
         try:
-            from .updater import validate_latest_json
+            from .updater import validate_latest_json, EncryptHomeUpdater
 
-            response = requests.get(UPDATE_URL, timeout=5)
+            url = UPDATE_URL
+            if self.channel == "beta" and url.endswith("/releases/latest"):
+                url = url[: -len("/latest")]
+
+            response = requests.get(url, timeout=5)
             if response.status_code != 200:
                 raise ConnectionError(f"HTTP {response.status_code}")
             data = response.json()
+            if isinstance(data, list):
+                if not data:
+                    raise ValueError("Keine Releases gefunden.")
+                data = data[0]
             if isinstance(data, dict) and "tag_name" in data and "assets" in data:
-                from .updater import EncryptHomeUpdater
-
                 data = EncryptHomeUpdater._github_release_to_manifest(data)
             data = validate_latest_json(data)
             self.finished.emit(data)
@@ -1002,6 +1013,16 @@ class SettingsDialog(QDialog):
         self.update_status_label.setObjectName("ReqInfo")
         layout.addWidget(self.update_status_label)
 
+        channel_row = QHBoxLayout()
+        channel_row.addWidget(QLabel("Update-Kanal:"))
+        self.channel_combo = QComboBox()
+        self.channel_combo.addItems(["stable", "beta"])
+        self.channel_combo.setCurrentText(self.data.get("update_channel", "stable"))
+        self.channel_combo.currentTextChanged.connect(self._save_update_channel)
+        channel_row.addWidget(self.channel_combo)
+        channel_row.addStretch()
+        layout.addLayout(channel_row)
+
         # Update Buttons
         btn_row = QHBoxLayout()
 
@@ -1072,7 +1093,7 @@ class SettingsDialog(QDialog):
         """Startet den Worker-Thread."""
         self.changelog_text.setText("Verbinde mit Server und lade Changelog...")
 
-        self.worker = ChangelogWorker()
+        self.worker = ChangelogWorker(channel=self.data.get("update_channel", "stable"))
         self.worker.finished.connect(self.on_changelog_loaded)
         self.worker.error.connect(self.on_changelog_error)
         self.worker.start()
@@ -1163,6 +1184,7 @@ class SettingsDialog(QDialog):
             updater = EncryptHomeUpdater(
                 current_version=VERSION_FULL,
                 update_json_url=self.data.get("update_url", UPDATE_URL),
+                channel=self.data.get("update_channel", "stable"),
             )
 
             # Smart: Innerhalb des Cooldowns das letzte Ergebnis nutzen,
@@ -1292,6 +1314,7 @@ class SettingsDialog(QDialog):
         updater = EncryptHomeUpdater(
             current_version=VERSION_FULL,
             update_json_url=self.data.get("update_url", UPDATE_URL),
+            channel=self.data.get("update_channel", "stable"),
         )
 
         reply = QMessageBox.question(
@@ -1311,6 +1334,7 @@ class SettingsDialog(QDialog):
             updater = EncryptHomeUpdater(
                 current_version=VERSION_FULL,
                 update_json_url=self.data.get("update_url", UPDATE_URL),
+                channel=self.data.get("update_channel", "stable"),
             )
             try:
                 manifest = updater.fetch_manifest()
@@ -1419,6 +1443,10 @@ class SettingsDialog(QDialog):
 
     def _save_list_show_date(self, checked):
         self.data["list_show_date"] = bool(checked)
+        save_settings(self.data)
+
+    def _save_update_channel(self, channel):
+        self.data["update_channel"] = (channel or "stable").lower()
         save_settings(self.data)
 
     def _apply_theme_now(self):
