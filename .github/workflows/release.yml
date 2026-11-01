@@ -52,6 +52,7 @@ jobs:
         shell: bash
         run: |
           pyinstaller --noconfirm --windowed --onefile --name EncryptHome main.py \
+            --icon "utilities/assets/app/icon.ico" \
             --collect-all PyQt6 \
             --add-data "utilities${{ matrix.sep }}utilities" \
             --add-data "docs${{ matrix.sep }}docs" \
@@ -72,7 +73,6 @@ jobs:
         shell: cmd
         run: |
           copy TOS.txt dist\TOS.txt
-          if not exist dist\utilities xcopy /E /I /Y utilities dist\utilities
 
       - name: Install Inno Setup (Windows)
         if: runner.os == 'Windows'
