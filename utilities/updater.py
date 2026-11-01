@@ -190,6 +190,24 @@ class EncryptHomeUpdater:
         data = self.fetch_manifest()
         latest_version = normalize_version_label(data["version"])
 
+        # Allow switching from a pre-release (beta) to a stable release
+        # of the same or a newer core version, even if the version number
+        # itself is not strictly greater.
+        current_is_prerelease = "-" in str(self.current_version)
+        latest_is_stable = "-" not in str(latest_version)
+        if (
+            self.channel == "stable"
+            and current_is_prerelease
+            and latest_is_stable
+        ):
+            try:
+                cur_core = tuple(int(p) for p in str(self.current_version).split("-")[0].split(".")[:3])
+                lat_core = tuple(int(p) for p in str(latest_version).split("-")[0].split(".")[:3])
+                if lat_core >= cur_core:
+                    return {"status": "UPDATE_AVAILABLE", "data": data}
+            except Exception:
+                pass
+
         if not is_newer_version(latest_version, self.current_version):
             return {"status": "NO_UPDATE", "data": data}
 
