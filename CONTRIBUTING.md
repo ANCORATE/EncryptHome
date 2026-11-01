@@ -17,6 +17,12 @@ Thank you for your interest in contributing to EncryptHome.
 - Preserve backward compatibility with existing `.salt` vaults unless a migration is explicitly planned.
 - Prefer the smallest correct change and avoid large refactors without justification.
 
+## Branch roles
+
+- `main` — stable, release-ready
+- `dev` — active development
+- `beta` — pre-release testing
+
 ## Development setup
 
 ```bash
