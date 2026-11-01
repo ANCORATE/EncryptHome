@@ -97,4 +97,8 @@ jobs:
           files: |
             artifacts/*
             EncryptHome-${{ github.ref_name }}-source.zip
-          generate_release_notes: true
+          generate_release_notes: false
+          body: |
+            First public release of EncryptHome.
+
+            Includes Windows, macOS, and Linux binaries.
