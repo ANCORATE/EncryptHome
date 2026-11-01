@@ -39,6 +39,7 @@ jobs:
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
+          PYTHONPATH: .
         run: pytest -q
 
       - name: Build executable
