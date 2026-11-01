@@ -255,6 +255,41 @@ class EncryptHomeUpdater:
     # -------------------------
     # Manifest abrufen + validieren
     # -------------------------
+    @staticmethod
+    def _github_release_asset(data: dict) -> dict | None:
+        assets = data.get("assets") or []
+        system = platform.system().lower()
+        keywords = []
+        if system == "windows":
+            keywords = ["windows", ".exe"]
+        elif system == "darwin":
+            keywords = ["macos", "mac", "darwin"]
+        else:
+            keywords = ["linux"]
+
+        for asset in assets:
+            name = str(asset.get("name", "")).lower()
+            if any(keyword in name for keyword in keywords):
+                return asset
+        return assets[0] if assets else None
+
+    @staticmethod
+    def _github_release_to_manifest(data: dict) -> dict:
+        tag = str(data.get("tag_name", "")).strip().lstrip("v")
+        asset = EncryptHomeUpdater._github_release_asset(data)
+        if not asset:
+            raise ValueError("GitHub-Release enthält keine passende Datei.")
+        url = asset.get("browser_download_url")
+        if not url:
+            raise ValueError("GitHub-Release-Asset hat keine Download-URL.")
+        return {
+            "version": tag,
+            "url": url,
+            "sha256": None,
+            "size_mb": None,
+            "published_at": data.get("published_at"),
+        }
+
     def fetch_manifest(self, timeout: int = 8) -> dict:
         try:
             response = requests.get(self.update_json_url, timeout=timeout)
@@ -268,6 +303,9 @@ class EncryptHomeUpdater:
             data = response.json()
         except Exception as e:
             raise ValueError(f"Update-Manifest ist kein gültiges JSON: {e}") from e
+
+        if isinstance(data, dict) and "tag_name" in data and "assets" in data:
+            data = self._github_release_to_manifest(data)
 
         return validate_latest_json(data)
 

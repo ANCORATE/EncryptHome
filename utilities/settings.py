@@ -45,10 +45,10 @@ _STABLE_SETTINGS_INFO = "ancorate-settings-v2-stable"
 _MIGRATED = False  # einmalige Migration alter Klartext-Dateien pro Prozess
 
 VERSION_YEAR = "27"
-VERSION_FULL = "27.0-beta.1"
+VERSION_FULL = "27.0"
 
 
-UPDATE_URL = "https://ancorate.github.io/latest/EncryptHome/latest.json"
+UPDATE_URL = "https://api.github.com/repos/ANCORATE/EncryptHome/releases/latest"
 
 DEFAULT_SETTINGS = {
     # --- Hotkeys (alt Defaults) ---
@@ -535,7 +535,12 @@ class ChangelogWorker(QThread):
             response = requests.get(UPDATE_URL, timeout=5)
             if response.status_code != 200:
                 raise ConnectionError(f"HTTP {response.status_code}")
-            data = validate_latest_json(response.json())
+            data = response.json()
+            if isinstance(data, dict) and "tag_name" in data and "assets" in data:
+                from .updater import EncryptHomeUpdater
+
+                data = EncryptHomeUpdater._github_release_to_manifest(data)
+            data = validate_latest_json(data)
             self.finished.emit(data)
         except Exception as e:
             self.error.emit(str(e))
