@@ -67,11 +67,34 @@ jobs:
             cp dist/EncryptHome "${{ matrix.artifact }}"
           fi
 
+      - name: Prepare installer data (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          copy TOS.txt dist\TOS.txt
+          if not exist dist\utilities xcopy /E /I /Y utilities dist\utilities
+
+      - name: Install Inno Setup (Windows)
+        if: runner.os == 'Windows'
+        run: choco install innosetup -y
+
+      - name: Build installer (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: iscc EncryptHome.iss
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
+
+      - name: Upload installer (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: EncryptHome-Setup.exe
+          path: dist/setup_output/*.exe
 
   release:
     needs: build
