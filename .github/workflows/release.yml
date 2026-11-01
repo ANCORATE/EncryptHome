@@ -14,12 +14,15 @@ jobs:
           - os: windows-latest
             artifact: EncryptHome-Windows.exe
             sep: ";"
+            icon: '--icon "utilities/assets/app/icon.ico"'
           - os: macos-latest
             artifact: EncryptHome-macOS
             sep: ":"
+            icon: ""
           - os: ubuntu-latest
             artifact: EncryptHome-Linux
             sep: ":"
+            icon: ""
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -51,8 +54,12 @@ jobs:
       - name: Build executable
         shell: bash
         run: |
+          ICON_ARG=""
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            ICON_ARG='--icon "utilities/assets/app/icon.ico"'
+          fi
           pyinstaller --noconfirm --windowed --onefile --name EncryptHome main.py \
-            --icon "utilities/assets/app/icon.ico" \
+            $ICON_ARG \
             --collect-all PyQt6 \
             --add-data "utilities${{ matrix.sep }}utilities" \
             --add-data "docs${{ matrix.sep }}docs" \
