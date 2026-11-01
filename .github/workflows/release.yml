@@ -52,6 +52,7 @@ jobs:
         shell: bash
         run: |
           pyinstaller --noconfirm --windowed --onefile --name EncryptHome main.py \
+            --collect-all PyQt6 \
             --add-data "utilities${{ matrix.sep }}utilities" \
             --add-data "docs${{ matrix.sep }}docs" \
             --add-data "TOS.txt${{ matrix.sep }}." \
@@ -99,6 +100,6 @@ jobs:
             EncryptHome-${{ github.ref_name }}-source.zip
           generate_release_notes: false
           body: |
-            First public release of EncryptHome.
+            Release ${{ github.ref_name }} of EncryptHome.
 
             Includes Windows, macOS, and Linux binaries.
