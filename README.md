@@ -34,11 +34,6 @@ python main.py
 
 Full docs are also maintained in the GitHub Wiki.
 
-## Development
-
-```bash
-pytest
-```
 
 ## License
 
