@@ -195,9 +195,79 @@ class EncryptHomeUpdater:
         return {"status": "UPDATE_AVAILABLE", "data": data}
 
     # -------------------------
+    # Standalone-EXE selbst aktualisieren (PyInstaller-onefile)
+    # -------------------------
+    def _start_standalone_update(self, expected_sha256: str | None = None):
+        data = self.fetch_manifest()
+        setup_url = data["url"]
+        sha256 = expected_sha256 or data.get("sha256", "")
+
+        url_name = os.path.basename(urlparse(setup_url).path).strip()
+        if not url_name:
+            url_name = "EncryptHome" + (".exe" if platform.system() == "Windows" else "")
+        setup_path = os.path.join(self.update_dir, url_name)
+
+        self._download_file(setup_url, setup_path)
+
+        if sha256:
+            if not self._verify_sha256(setup_path, sha256):
+                self._cleanup_file(setup_path)
+                self._download_file(setup_url, setup_path, resume=False)
+                if not self._verify_sha256(setup_path, sha256):
+                    raise RuntimeError(
+                        "SHA256-Prüfung fehlgeschlagen; die Datei wurde mehrfach "
+                        "fehlerhaft übertragen."
+                    )
+
+        if not os.path.getsize(setup_path) > 0:
+            raise RuntimeError("Der heruntergeladene Update ist leer.")
+
+        current = sys.executable
+        pid = os.getpid()
+
+        if platform.system() == "Windows":
+            script = os.path.join(self.update_dir, "update_replace.bat")
+            with open(script, "w", encoding="utf-8") as f:
+                f.write("@echo off\n")
+                f.write(":wait\n")
+                f.write(f'tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL\n')
+                f.write("if %ERRORLEVEL%==0 (\n")
+                f.write("  timeout /t 1 /nobreak >NUL\n")
+                f.write("  goto wait\n")
+                f.write(")\n")
+                f.write(f'move /Y "{setup_path}" "{current}"\n')
+                f.write(f'start "" "{current}"\n')
+                f.write('del "%~f0"\n')
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            DETACHED_PROCESS = 0x00000008
+            subprocess.Popen(
+                ["cmd", "/c", script],
+                creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
+                close_fds=True,
+            )
+        else:
+            script = os.path.join(self.update_dir, "update_replace.sh")
+            with open(script, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\n")
+                f.write(f"while kill -0 {pid} 2>/dev/null; do sleep 1; done\n")
+                f.write(f'cp "{setup_path}" "{current}"\n')
+                f.write(f'chmod +x "{current}"\n')
+                f.write(f'"{current}" &\n')
+                f.write('rm -f "$0"\n')
+            os.chmod(script, 0o755)
+            subprocess.Popen(["/bin/sh", script], start_new_session=True, close_fds=True)
+
+        sys.exit(0)
+
+    # -------------------------
     # Installer starten
     # -------------------------
     def start_update(self, expected_sha256: str | None = None):
+        # Standalone-Builds aktualisieren sich selbst
+        if getattr(sys, "frozen", False):
+            return self._start_standalone_update(expected_sha256)
+
+
         """
         Lädt die Setup-Datei herunter, verifiziert ihre Integrität und startet sie.
         Beendet anschließend die aktuelle Anwendung.
