@@ -3,7 +3,10 @@
 
 import sys
 import os
-import psutil
+try:
+    import psutil
+except ImportError:  # pragma: no cover - optional dependency
+    psutil = None
 import threading
 import time
 
@@ -29,18 +32,45 @@ def get_all_drives():
     system = platform.system()
     drives = []
     seen = set()
-    for part in psutil.disk_partitions(all=False):
-        if system == "Windows":
-            path = part.device.strip().rstrip("\\/")
-            if path:
-                path += "\\"
-        else:
-            path = part.mountpoint
-        if not path or path in seen:
-            continue
-        seen.add(path)
-        if os.path.isdir(path):
-            drives.append(path)
+
+    if psutil is not None:
+        for part in psutil.disk_partitions(all=False):
+            if system == "Windows":
+                path = part.device.strip().rstrip("\\/")
+                if path:
+                    path += "\\"
+            else:
+                path = part.mountpoint
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            if os.path.isdir(path):
+                drives.append(path)
+        if drives:
+            return drives
+
+    # Fallback without psutil
+    if system == "Windows":
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            path = f"{letter}:\\"
+            if os.path.isdir(path) and path not in seen:
+                seen.add(path)
+                drives.append(path)
+    else:
+        # Common mount points; / covers the root filesystem.
+        for path in ("/",):
+            if os.path.isdir(path) and path not in seen:
+                seen.add(path)
+                drives.append(path)
+        # Best-effort: include immediate subdirectories of / that look like mounts.
+        try:
+            for name in os.listdir("/"):
+                candidate = os.path.join("/", name)
+                if os.path.ismount(candidate) and candidate not in seen and os.path.isdir(candidate):
+                    seen.add(candidate)
+                    drives.append(candidate)
+        except OSError:
+            pass
     return drives
 
 
