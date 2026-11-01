@@ -102,4 +102,11 @@ jobs:
           body: |
             Release ${{ github.ref_name }} of EncryptHome.
 
+            Changes:
+            - Centralized version management
+            - GitHub Releases-based updates (stable/beta channels)
+            - Standalone executable self-update
+            - SOS scanner without hard psutil dependency
+            - CI and packaging improvements
+
             Includes Windows, macOS, and Linux binaries.
