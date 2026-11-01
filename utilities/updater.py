@@ -18,56 +18,77 @@ import requests
 # ---------------------------------------------------------------
 # Versionsvergleich (zentral, robust)
 # ---------------------------------------------------------------
-_PRERELEASE_ORDER = {
-    "alpha": -3,
-    "a": -3,
-    "beta": -2,
-    "b": -2,
-    "rc": -1,
-    "final": 0,
-    "release": 0,
-    "ga": 0,
-    "gold": 0,
-    "stable": 0,
-}
-
-
 def parse_version(version) -> tuple:
     """
-    Zerlegt eine Versionsnummer in ein vergleichbares Tupel.
+    Convert a version into a comparable tuple.
 
-    Unterstützt:
-      - numerische Kernversion  "1.2.3"
-      - Prä-Release             "1.2.3-beta.1", "1.2.3rc1"
-      - Build-Metadaten         "1.2.3+abc" (wird ignoriert)
+    Keeps the first three components in these positions:
+    [0] major, [1] minor, [2] patch.
 
-    Gibt immer ein Tupel zurück, das lexikografisch verglichen werden kann:
-    (maj, min, patch, prerelease_key, prerelease_part). Eine Release-Version
-    ist immer GRÖSSER als jede Prä-Release der gleichen Kernversion.
+    Additional components are compared before the
+    prerelease identifier.
     """
     raw = str(version).strip()
-    # Build-Metadaten abtrennen (werden für den Vergleich ignoriert)
-    raw = raw.split("+", 1)[0]
 
-    match = re.match(r"^(\d+(?:\.\d+)*)(?:[-.]?([a-zA-Z]+)\.?(\d*))?$", raw)
+    # Separate and validate build metadata.
+    if "+" in raw:
+        raw, build = raw.split("+", 1)
+
+        if not re.fullmatch(r"[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*", build):
+            raise ValueError("Invalid build metadata.")
+
+    pattern = (
+        r"^(?P<core>\d+(?:\.\d+)*)"
+        r"(?:-?(?P<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+    )
+
+    match = re.fullmatch(pattern, raw)
+
     if not match:
-        # Nicht parsbare Angabe -> als 0.0.0-Relealse behandeln
-        return (0, 0, 0, _PRERELEASE_ORDER.get("", 0), 0,)
+        raise ValueError(f"Invalid version: {version}")
 
-    core, pre_kind, pre_num = match.groups()
+    # Numeric components.
+    core_parts = [int(part) for part in match.group("core").split(".")]
 
-    core_parts = [int(p) for p in core.split(".")]
     while len(core_parts) < 3:
         core_parts.append(0)
-    maj, mid, mind = core_parts[:3]
 
-    if not pre_kind:
-        # Voll freigegebene Version: höchste Priorität
-        return (maj, mid, mind, 0, 0)
+    major, minor, patch = core_parts[:3]
+    extra_parts = core_parts[3:]
 
-    key = _PRERELEASE_ORDER.get(pre_kind.lower(), -99)
-    part = int(pre_num) if pre_num else 0
-    return (maj, mid, mind, key, part)
+    # Remove trailing zero-valued additional components.
+    while extra_parts and extra_parts[-1] == 0:
+        extra_parts.pop()
+
+    # Prerelease identifiers.
+    prerelease = match.group("prerelease")
+
+    if prerelease:
+        identifiers = []
+
+        for part in prerelease.split("."):
+            if part.isdigit():
+                if len(part) > 1 and part.startswith("0"):
+                    raise ValueError("Invalid numeric identifier.")
+
+                identifiers.append((0, int(part)))
+            else:
+                identifiers.append((1, part))
+
+        prerelease_key = tuple(identifiers)
+        release_flag = 0
+    else:
+        prerelease_key = ()
+        release_flag = 1
+
+    return (
+        major,
+        minor,
+        patch,
+        tuple(extra_parts),
+        release_flag,
+        prerelease_key,
+    )
 
 def is_newer_version(latest, current) -> bool:
     """True, wenn latest eine neuere Version ist als current."""
@@ -116,6 +137,8 @@ def validate_latest_json(data) -> dict:
     version = data.get("version")
     if not isinstance(version, str) or not version.strip():
         raise ValueError("Update-Manifest enthält keine gültige 'version'.")
+
+    parse_version(version)
 
     url = data.get("url")
     if not isinstance(url, str) or not _is_https_url(url):
