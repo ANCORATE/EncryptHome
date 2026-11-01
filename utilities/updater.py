@@ -18,68 +18,96 @@ import requests
 # ---------------------------------------------------------------
 # Versionsvergleich (zentral, robust)
 # ---------------------------------------------------------------
+_PRERELEASE_ALIASES = {
+    "a": "alpha",
+    "b": "beta",
+}
+_RELEASE_ALIASES = {"final", "ga", "gold", "release", "stable"}
+
+
 def parse_version(version) -> tuple:
     """
-    Convert a version into a comparable tuple.
+    Parse a version into a tuple suitable for semantic comparison.
 
-    Keeps the first three components in these positions:
-    [0] major, [1] minor, [2] patch.
-
-    Additional components are compared before the
-    prerelease identifier.
+    Supports numeric core components, prerelease identifiers,
+    legacy aliases and build metadata.
     """
     raw = str(version).strip()
 
     # Separate and validate build metadata.
     if "+" in raw:
         raw, build = raw.split("+", 1)
-
-        if not re.fullmatch(r"[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*", build):
+        if not re.fullmatch(
+            r"[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*",
+            build
+        ):
             raise ValueError("Invalid build metadata.")
 
     pattern = (
         r"^(?P<core>\d+(?:\.\d+)*)"
-        r"(?:-?(?P<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+        r"(?:-?(?P<prerelease>"
+        r"[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*"
+        r"))?$"
     )
 
     match = re.fullmatch(pattern, raw)
-
     if not match:
         raise ValueError(f"Invalid version: {version}")
 
-    # Numeric components.
-    core_parts = [int(part) for part in match.group("core").split(".")]
-
+    core_parts = [
+        int(part)
+        for part in match.group("core").split(".")
+    ]
     while len(core_parts) < 3:
         core_parts.append(0)
 
     major, minor, patch = core_parts[:3]
     extra_parts = core_parts[3:]
 
-    # Remove trailing zero-valued additional components.
     while extra_parts and extra_parts[-1] == 0:
         extra_parts.pop()
 
-    # Prerelease identifiers.
     prerelease = match.group("prerelease")
-
+    identifiers = []
+    release_flag = 1
     if prerelease:
-        identifiers = []
-
-        for part in prerelease.split("."):
-            if part.isdigit():
-                if len(part) > 1 and part.startswith("0"):
-                    raise ValueError("Invalid numeric identifier.")
-
-                identifiers.append((0, int(part)))
-            else:
-                identifiers.append((1, part))
-
-        prerelease_key = tuple(identifiers)
-        release_flag = 0
-    else:
-        prerelease_key = ()
-        release_flag = 1
+        parts = prerelease.split(".")
+        if len(parts) == 1 and parts[0].lower() in _RELEASE_ALIASES:
+            prerelease = None
+        else:
+            release_flag = 0
+            for part in parts:
+                # Preserve compact forms such as rc1 and beta10.
+                compact_match = re.fullmatch(
+                    r"(?P<name>[A-Za-z-]+?)(?P<number>\d+)",
+                    part
+                )
+                if compact_match:
+                    suffix = compact_match.group("number")
+                    if len(suffix) > 1 and suffix.startswith("0"):
+                        raise ValueError("Invalid numeric identifier.")
+                    name = compact_match.group("name")
+                    name = name.lower() if name.lower() in {
+                        "alpha", "a", "beta", "b", "rc"
+                    } else name
+                    identifiers.append(
+                        (1, _PRERELEASE_ALIASES.get(name, name))
+                    )
+                    identifiers.append((0, int(suffix)))
+                elif part.isdigit():
+                    if len(part) > 1 and part.startswith("0"):
+                        raise ValueError("Invalid numeric identifier.")
+                    identifiers.append((0, int(part)))
+                else:
+                    normalized_part = part.lower() if part.lower() in {
+                        "alpha", "a", "beta", "b", "rc"
+                    } else part
+                    identifiers.append(
+                        (1, _PRERELEASE_ALIASES.get(
+                            normalized_part,
+                            normalized_part
+                        ))
+                    )
 
     return (
         major,
@@ -87,7 +115,7 @@ def parse_version(version) -> tuple:
         patch,
         tuple(extra_parts),
         release_flag,
-        prerelease_key,
+        tuple(identifiers),
     )
 
 def is_newer_version(latest, current) -> bool:
@@ -216,20 +244,17 @@ class EncryptHomeUpdater:
         # Allow switching from a pre-release (beta) to a stable release
         # of the same or a newer core version, even if the version number
         # itself is not strictly greater.
-        current_is_prerelease = "-" in str(self.current_version)
-        latest_is_stable = "-" not in str(latest_version)
+        current_version_key = parse_version(self.current_version)
+        latest_version_key = parse_version(latest_version)
+        current_is_prerelease = current_version_key[4] == 0
+        latest_is_stable = latest_version_key[4] == 1
         if (
             self.channel == "stable"
             and current_is_prerelease
             and latest_is_stable
+            and latest_version_key[:4] >= current_version_key[:4]
         ):
-            try:
-                cur_core = tuple(int(p) for p in str(self.current_version).split("-")[0].split(".")[:3])
-                lat_core = tuple(int(p) for p in str(latest_version).split("-")[0].split(".")[:3])
-                if lat_core >= cur_core:
-                    return {"status": "UPDATE_AVAILABLE", "data": data}
-            except Exception:
-                pass
+            return {"status": "UPDATE_AVAILABLE", "data": data}
 
         if not is_newer_version(latest_version, self.current_version):
             return {"status": "NO_UPDATE", "data": data}
