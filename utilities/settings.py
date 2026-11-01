@@ -44,8 +44,7 @@ _SETTINGS_INFO = "ancorate-settings-v1"
 _STABLE_SETTINGS_INFO = "ancorate-settings-v2-stable"
 _MIGRATED = False  # einmalige Migration alter Klartext-Dateien pro Prozess
 
-VERSION_YEAR = "27"
-VERSION_FULL = "27.0"
+from version import VERSION as VERSION_FULL, VERSION_YEAR
 
 
 UPDATE_URL = "https://api.github.com/repos/ANCORATE/EncryptHome/releases/latest"
