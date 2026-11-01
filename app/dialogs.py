@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 # ANCORATE EncryptHome - gesplittetes Modul
 # (aus main.py extrahiert; Ausgangspunkt bleibt main.py)
-# (c) 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
 #
 
 import os
@@ -30,7 +32,7 @@ class SetupDialog(QDialog):
 
         lbl = QLabel(
             f"""Willkommen bei ANCORATE {edition} {version_year}.
-© 2025–2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin
+© 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin (MIT License)
 
 Ein lokaler PC‑Key wird nun erzeugt
 und dauerhaft an dieses Gerät gebunden."""
@@ -85,7 +87,7 @@ class LoginDialog(QDialog):
         lbl = QLabel(
             f"Willkommen bei {edition}, deinem sicheren Dateimanager von ANCORATE.\n"
             "Die Anmeldung erfolgt über dein registriertes Gerät.\n\n"
-            f"ANCORATE {edition} {version} ist © 2026\n"
+            f"ANCORATE {edition} {version}\n"
             "by Samuel J. Tirwa & Gabriel Leiria‑Roussin"
         )
         lbl.setObjectName("DialogIntro")
@@ -132,15 +134,6 @@ class LoginDialog(QDialog):
             self.reject()
             return
 
-        """if not LicenseDialog.load_and_validate_license():
-            QMessageBox.warning(
-                self,
-                "Keine gültige Lizenz",
-                "Es wurde keine gültige Lizenz gefunden.\n"
-                f"Bitte aktiviere {edition} erneut."
-            )
-            self.reject()
-            return"""
 
         self.valid_key = device_key
 
@@ -841,7 +834,7 @@ class DetailsDialog(QDialog):
             add_section(
                 "Lizenz & Compliance",
                 [
-                    ("Lizenzmodell", "Proprietär · Closed Source"),
+                    ("Lizenzmodell", "MIT / Open Source"),
                     ("Datenhaltung", "Vollständig lokal · keine Datensammlung"),
                 ],
             )
@@ -1096,7 +1089,7 @@ class AboutDialog(QDialog):
         rows = [
             ("Version", f"{version}  ({type_edition})"),
             ("Entwicklung", "Samuel J. Tirwa · Gabriel Leiria-Roussin"),
-            ("Lizenz", "Proprietär / Closed Source"),
+            ("Lizenz", "MIT / Open Source"),
         ]
         for i, (k, v) in enumerate(rows):
             kl = QLabel(k)
@@ -1148,7 +1141,7 @@ class AboutDialog(QDialog):
         flay = QHBoxLayout(footer)
         flay.setContentsMargins(34, 18, 34, 18)
 
-        copy_lbl = QLabel("© 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin")
+        copy_lbl = QLabel("© 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin — MIT License")
         copy_lbl.setObjectName("Copyright")
 
         close_btn = QPushButton("Schließen")

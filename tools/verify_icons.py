@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 """Prueft den SVG-Glyphensatz aus utilities/assets/ui.
 
 Der Icon-Satz traegt die Semantik der Toolbar (Datei hinzufuegen, Vorschau,

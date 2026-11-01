@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 """
 Erkennung von System-Schlaf/Lock-Zyklen zur sofortigen Tresor-Sperrung.
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 # ANCORATE EncryptHome - gesplittetes Modul
 # (aus main.py extrahiert; Ausgangspunkt bleibt main.py)
-# (c) 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
 #
 
 from PyQt6.QtCore import *

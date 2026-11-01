@@ -501,7 +501,7 @@ Secure deletion overwrites the target data in-place before it is removed. Each p
 - **Least Privilege**: Minimal required access
 - **Fail Secure**: Secure by default, fail to secure state
 - **Secure by Design**: Security built in, not added on
-- **Transparency**: Open security architecture (implementation proprietary)
+- **Transparency**: Open security architecture and open source implementation
 
 ### Standards Alignment
 - **NIST**: Cryptographic standards compliance
@@ -545,6 +545,6 @@ Secure deletion overwrites the target data in-place before it is removed. Each p
 
 For security concerns or vulnerability reports, contact the ANCORATE security team through official channels.
 
-**Important**: This security documentation is for authorized developers and security professionals only. Unauthorized distribution or modification is prohibited.
+This security documentation is part of the open source project. See the project [LICENSE](../LICENSE) for terms.
 
-© 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
+© 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin.

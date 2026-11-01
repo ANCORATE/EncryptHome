@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 import hashlib
 import json
 import os

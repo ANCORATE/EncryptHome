@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 # -*- coding: utf-8 -*-
 """Themenabhaengige UI-Icons fuer ANCORATE EncryptHome.
 

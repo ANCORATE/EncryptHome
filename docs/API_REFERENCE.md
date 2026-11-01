@@ -1058,4 +1058,3 @@ EncryptHomeUpdater(current_version: str, update_json_url: str)
 
 This API reference covers all public APIs and important internal functions. For implementation details, refer to the source code.
 
-© 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.

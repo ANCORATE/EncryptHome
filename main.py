@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 # ANCORATE EncryptHome
-# (c) 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
-# IF YOU ARE READING OR MODIFYING THIS CODE WITHOUT AUTHORIZATION, YOU ARE IN VIOLATION OF COPYRIGHT LAW.
-# This code is part of the ANCORATE Encryption Suite. Unauthorized distribution or modification is prohibited.
 # -------------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------------------------
 
@@ -143,10 +143,3 @@ if __name__ == "__main__":
     main()
 
 
-# (c) 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved. Distribution without permission prohibited.
-# This code is part of ANCORATE Encryption Software.
-# Unauthorized copying of this file, via any medium is strictly prohibited.
-# Proprietary and confidential.
-# Written by Samuel J. Tirwa & Gabriel Leiria-Roussin.
-# January 2026
-# Version 27 Beta 1

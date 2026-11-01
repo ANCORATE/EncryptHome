@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 """Optional screenshot/capture protection for EncryptHome Qt windows.
 
 Windows-only implementation. On Linux and macOS this module is safe to

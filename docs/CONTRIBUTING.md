@@ -501,25 +501,19 @@ Contributions for releases must:
 
 ### Code Ownership
 
-- All code remains property of ANCORATE
-- Contributors retain authorship credit
-- No code relicensing without explicit permission
-- Proprietary software restrictions apply
+- This project is licensed under the MIT License.
+- Contributors retain authorship credit.
+- Contributions are accepted under the same MIT License.
 
 ### Contribution Rights
 
 By contributing, you agree to:
-
-- Your contribution becomes property of ANCORATE
-- Your contribution follows the same license
-- Your contribution may be used commercially
-- Your contribution is not to be distributed elsewhere
+- Your contribution being licensed under the MIT License
+- Your contribution being used and distributed according to that license
 
 ### Copyright
 
-© 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
-
-Unauthorized distribution or modification is prohibited.
+Copyright 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin.
 
 ## Getting Started
 
@@ -593,4 +587,4 @@ Thank you for your interest in contributing to EncryptHome. Your contributions h
 
 Remember: Security is not an afterthought—it's the foundation of everything we do.
 
-© 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
+© 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin.

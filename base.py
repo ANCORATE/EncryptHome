@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
@@ -14,4 +17,3 @@ def derive_subkey(master_key: bytes, file_nonce: bytes, filename: str) -> bytes:
     )
     return hkdf.derive(master_key)
 
-# THIS CODE IS PROPERTY OF SAMUEL J. TIRWA & GABRIEL LEIRIA-ROUSSIN. NO PART OF THIS CODE MAY BE REPRODUCED, REUSED, MODIFIED, OR DISTRIBUTED WITHOUT THE EXPRESS PERMISSION OF THE AUTHORS. VIOLATORS WILL BE PROSECUTED TO THE FULLEST EXTENT OF THE LAW. COPYRIGHT 2025. ALL RIGHTS RESERVED.

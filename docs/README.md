@@ -9,7 +9,7 @@ Developer documentation for the ANCORATE EncryptHome desktop application.
 - **Language:** Python 3
 - **Edition:** EncryptHome Capsule
 - **Container:** `.salt`
-- **License:** Proprietary — © 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+- **License:** MIT — © 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
 
 `main.py` remains the public entry point. It re-exports symbols from the `app` package so existing imports such as `from main import ...` remain valid.
 
@@ -123,6 +123,6 @@ Documentation should describe the code that exists, not planned features. If imp
 
 ## License
 
-This is proprietary software. Unauthorized reproduction, reuse, modification, or distribution is prohibited.
+This project is licensed under the MIT License. See [LICENSE](../LICENSE) for details.
 
-© 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
+© 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin.

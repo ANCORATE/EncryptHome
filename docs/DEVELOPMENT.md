@@ -665,4 +665,3 @@ jobs:
 
 This development guide provides comprehensive information for setting up and working with the EncryptHome codebase. Follow the AGENTS.md guidelines for all development work.
 
-© 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.

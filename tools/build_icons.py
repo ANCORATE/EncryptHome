@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 """Erzeugt den SVG-Glyphensatz in utilities/assets/ui.
 
 Die Toolbar-Icons liegen als 24x24-SVGs mit dem Platzhalter {{color}} vor

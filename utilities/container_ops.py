@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 # ANCORATE EncryptHome - reine Container-Operationen
-# (c) 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
 #
 # Enthält container-lokale Hilfen (NICHT verschlüsselt):
 #   - SHA-256 eines Klartextes berechnen

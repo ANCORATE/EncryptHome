@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-# © 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 #
 # Dateivorschau: Entschlüsselt eine Tresor-Datei in den RAM und zeigt eine Vorschau
 # für gängige Dateitypen (Text/Bild; PDF optional, wenn QtPdf verfügbar ist).

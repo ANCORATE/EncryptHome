@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: EncryptHome-Windows.exe
+            sep: ";"
+          - os: macos-latest
+            artifact: EncryptHome-macOS
+            sep: ":"
+          - os: ubuntu-latest
+            artifact: EncryptHome-Linux
+            sep: ":"
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyQt6 cryptography argon2-cffi requests pyinstaller
+
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -q
+
+      - name: Build executable
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --windowed --onefile --name EncryptHome main.py \
+            --add-data "utilities${{ matrix.sep }}utilities" \
+            --add-data "docs${{ matrix.sep }}docs" \
+            --add-data "TOS.txt${{ matrix.sep }}." \
+            --add-data "README.md${{ matrix.sep }}."
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp dist/EncryptHome.exe "${{ matrix.artifact }}"
+          else
+            cp dist/EncryptHome "${{ matrix.artifact }}"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create source archive
+        run: git archive --format=zip --output=EncryptHome-${{ github.ref_name }}-source.zip HEAD
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*
+            EncryptHome-${{ github.ref_name }}-source.zip
+          generate_release_notes: true

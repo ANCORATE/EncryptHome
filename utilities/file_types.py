@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 # ANCORATE EncryptHome - Dateityp-Erkennung
-# (c) 2026 by Samuel J. Tirwa & Gabriel Leiria-Roussin. All rights reserved.
 #
 # Ermittelt den tatsächlichen Dateityp:
 #   1. bevorzugt über die Magic-Bytes des Inhalts (falls Daten vorliegen),

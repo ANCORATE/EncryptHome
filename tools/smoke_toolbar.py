@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 """Laufzeit-Smoke-Test fuer Toolbar, Ansichts-Umschalter und Icons.
 
 Baut das echte Hauptfenster offscreen und prueft das Verhalten, das sich in

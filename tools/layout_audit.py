@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Samuel J. Tirwa & Gabriel Leiria-Roussin
+
 """Misst Layout-Metriken der Oberflaeche, die man sonst nur im Bild sieht.
 
 Prueft Dinge, die sich rechnen lassen: Einheitlichkeit von Abstaenden und
