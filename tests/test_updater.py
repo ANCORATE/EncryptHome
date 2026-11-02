@@ -12,6 +12,7 @@ from utilities.updater import EncryptHomeUpdater
 
 def test_github_release_manifest_preserves_asset_digest(monkeypatch, tmp_path):
     monkeypatch.setattr(EncryptHomeUpdater, "_user_update_dir", staticmethod(lambda: str(tmp_path)))
+    monkeypatch.setattr("utilities.updater.platform.system", lambda: "Linux")
 
     manifest = EncryptHomeUpdater._github_release_to_manifest(
         {
