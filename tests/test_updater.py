@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import platform
 
 import pytest
 
@@ -71,5 +72,6 @@ def test_user_install_path_is_outside_application_directory(monkeypatch, tmp_pat
 
     target = updater._user_install_path(str(tmp_path / "updates" / "EncryptHome-Linux"))
 
-    assert target == os.path.join(str(tmp_path), "app", "EncryptHome")
+    executable_name = "EncryptHome.exe" if platform.system() == "Windows" else "EncryptHome"
+    assert target == os.path.join(str(tmp_path), "app", executable_name)
     assert target != str(tmp_path / "updates" / "EncryptHome-Linux")
