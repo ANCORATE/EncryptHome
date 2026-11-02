@@ -80,10 +80,7 @@ ANCORATE_BLUE = "#1e88e5"
 ANCORATE_BLUE_SOFT = "#90caf9"
 BACKGROUND_DARK = "#0b0f14"
 
-version = "27.0"  # aktuelle Version der Software, wird in gui angezeigt
-version_year = "27"
-edition = "EncryptHome"  # Edition der Software
-type_edition = "Capsule"
+from .version import edition, type_edition, version, version_year  # noqa: F401
 
 
 def safe_run(cmd, timeout=1):
