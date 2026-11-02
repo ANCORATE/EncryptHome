@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.core import HEADER_LEN, META_LEN_SIZE, SALT_LEN, write_header
-from app.workers import AddWorker, DeleteWorker
+from app.workers import AddWorker, DeleteWorker, _safe_export_path
 from decrypt import decrypt_blob_range, decrypt_meta
 from encrypt import encrypt_file_to_blob, encrypt_meta
 from utilities.container_ops import (
@@ -45,6 +45,17 @@ class AtomicContainerUpdateTests(unittest.TestCase):
             meta_length = struct.unpack("<Q", vault.read(META_LEN_SIZE))[0]
             vault.seek(-META_LEN_SIZE - meta_length, os.SEEK_END)
             return decrypt_meta(vault.read(meta_length), self.master_key)
+
+    def test_export_path_cannot_escape_target_directory(self):
+        target = os.path.join(self.temp_dir.name, "export")
+        self.assertEqual(
+            _safe_export_path(target, "folder/file.txt"),
+            os.path.abspath(os.path.join(target, "folder", "file.txt")),
+        )
+        with self.assertRaises(ValueError):
+            _safe_export_path(target, "../outside.txt")
+        with self.assertRaises(ValueError):
+            _safe_export_path(target, "/absolute.txt")
 
     def test_failed_update_leaves_original_bytes_unchanged(self):
         original = Path(self.vault_path).read_bytes()
