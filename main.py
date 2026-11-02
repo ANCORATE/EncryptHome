@@ -18,20 +18,13 @@
 #    - app/main_window.py    Hauptfenster (App)
 #
 
-import importlib.util
 import sys
-from pathlib import Path
+from version import VERSION as version
 
 # CLI version probe before any Qt import so ``python main.py --version``
-# (and frozen builds) can answer without loading the GUI stack. Load the
-# version module by path so ``app/__init__.py`` does not pull in PyQt6.
-_version_path = Path(__file__).resolve().parent / "app" / "version.py"
-_version_spec = importlib.util.spec_from_file_location("_encrypthome_version", _version_path)
-assert _version_spec is not None and _version_spec.loader is not None
-_version_mod = importlib.util.module_from_spec(_version_spec)
-_version_spec.loader.exec_module(_version_mod)
-version = _version_mod.version
-edition = _version_mod.edition
+# (and frozen builds) can answer without loading the GUI stack. Importing the
+# plain root module also lets PyInstaller include the version source normally.
+edition = "EncryptHome"
 
 if __name__ == "__main__" and "--version" in sys.argv[1:]:
     print(version)
@@ -159,5 +152,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
