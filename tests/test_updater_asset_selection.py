@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from utilities.updater import EncryptHomeUpdater
 
 
@@ -26,20 +28,23 @@ RELEASE = {
 
 
 def test_portable_asset_is_selected_by_default():
-    asset = EncryptHomeUpdater._github_release_asset(RELEASE, installer=False)
+    with patch("utilities.updater.platform.system", return_value="Windows"):
+        asset = EncryptHomeUpdater._github_release_asset(RELEASE, installer=False)
     assert asset is not None
     assert asset["name"] == "EncryptHome-Windows.exe"
 
 
 def test_installer_asset_is_selected_when_requested():
-    asset = EncryptHomeUpdater._github_release_asset(RELEASE, installer=True)
+    with patch("utilities.updater.platform.system", return_value="Windows"):
+        asset = EncryptHomeUpdater._github_release_asset(RELEASE, installer=True)
     assert asset is not None
     assert asset["name"] == "EncryptHome-Setup.exe"
 
 
 def test_manifest_can_be_built_for_installer_asset():
-    asset = EncryptHomeUpdater._github_release_asset(RELEASE, installer=True)
-    manifest = EncryptHomeUpdater._github_release_to_manifest(RELEASE, asset=asset)
-    assert manifest["version"] == "27.1-beta"
+    with patch("utilities.updater.platform.system", return_value="Windows"):
+        asset = EncryptHomeUpdater._github_release_asset(RELEASE, installer=True)
+        manifest = EncryptHomeUpdater._github_release_to_manifest(RELEASE, asset=asset)
+    assert manifest["version"] == "v27.1-beta".lstrip("v")
     assert manifest["url"].endswith("EncryptHome-Setup.exe")
     assert manifest["sha256"] == "b" * 64
