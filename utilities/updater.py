@@ -243,13 +243,28 @@ class EncryptHomeUpdater:
     # Standalone-EXE selbst aktualisieren (PyInstaller-onefile)
     # -------------------------
     def _start_standalone_update(self, expected_sha256: str | None = None):
-        data = self.fetch_manifest()
+        current = os.path.abspath(sys.executable)
+        current_writable = self._path_is_writable(current)
+
+        # Release-Daten einmal laden; Asset-Auswahl abhaengig vom Installationsort.
+        release = self._fetch_release_data()
+        use_installer = (not current_writable) and platform.system() == "Windows"
+        asset = None
+        if use_installer:
+            asset = self._github_release_asset(release, installer=True)
+        if asset is None:
+            asset = self._github_release_asset(release, installer=False)
+            use_installer = False
+
+        data = self._github_release_to_manifest(release, asset=asset)
         setup_url = data["url"]
         sha256 = expected_sha256 or data.get("sha256", "")
 
         url_name = os.path.basename(urlparse(setup_url).path).strip()
         if not url_name:
-            url_name = "EncryptHome" + (".exe" if platform.system() == "Windows" else "")
+            url_name = "EncryptHome-Setup.exe" if use_installer else (
+                "EncryptHome" + (".exe" if platform.system() == "Windows" else "")
+            )
         setup_path = os.path.join(self.update_dir, url_name)
 
         self._download_file(setup_url, setup_path)
@@ -260,17 +275,31 @@ class EncryptHomeUpdater:
                 self._download_file(setup_url, setup_path, resume=False)
                 if not self._verify_sha256(setup_path, sha256):
                     raise RuntimeError(
-                        "SHA256-Prüfung fehlgeschlagen; die Datei wurde mehrfach "
-                        "fehlerhaft übertragen."
+                        "SHA256-Pruefung fehlgeschlagen; die Datei wurde mehrfach "
+                        "fehlerhaft uebertragen."
                     )
 
         if not os.path.getsize(setup_path) > 0:
             raise RuntimeError("Der heruntergeladene Update ist leer.")
 
-        current = os.path.abspath(sys.executable)
+        # Installer-Modus: Inno-Setup uebernimmt die Aktualisierung (inkl. UAC),
+        # auch in schreibgeschuetzten Installationsordnern wie Program Files.
+        if use_installer:
+            if platform.system() == "Windows":
+                import ctypes
+                result = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", setup_path, None, os.path.dirname(setup_path), 1
+                )
+                if result <= 32:
+                    raise RuntimeError("Der Installer konnte nicht gestartet werden.")
+            else:
+                os.chmod(setup_path, os.stat(setup_path).st_mode | 0o111)
+                subprocess.Popen([setup_path], close_fds=True, start_new_session=True)
+            sys.exit(0)
+
         pid = os.getpid()
 
-        if self._path_is_writable(current):
+        if current_writable:
             target = current
         else:
             target = self._user_install_path(setup_path)
@@ -285,13 +314,13 @@ class EncryptHomeUpdater:
             with open(script, "w", encoding="utf-8") as f:
                 f.write("@echo off\n")
                 f.write(":wait\n")
-                f.write(f'tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL\n')
+                f.write('tasklist /FI "PID eq %d" 2>NUL | find "%d" >NUL\n' % (pid, pid))
                 f.write("if %ERRORLEVEL%==0 (\n")
                 f.write("  timeout /t 1 /nobreak >NUL\n")
                 f.write("  goto wait\n")
                 f.write(")\n")
-                f.write(f'move /Y "{setup_path}" "{current}"\n')
-                f.write(f'start "" "{current}"\n')
+                f.write('move /Y "%s" "%s"\n' % (setup_path, current))
+                f.write('start "" "%s"\n' % current)
                 f.write('del "%~f0"\n')
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             DETACHED_PROCESS = 0x00000008
@@ -304,10 +333,10 @@ class EncryptHomeUpdater:
             script = os.path.join(self.update_dir, "update_replace.sh")
             with open(script, "w", encoding="utf-8") as f:
                 f.write("#!/bin/sh\n")
-                f.write(f"while kill -0 {pid} 2>/dev/null; do sleep 1; done\n")
-                f.write(f'cp "{setup_path}" "{current}"\n')
-                f.write(f'chmod +x "{current}"\n')
-                f.write(f'"{current}" &\n')
+                f.write("while kill -0 %d 2>/dev/null; do sleep 1; done\n" % pid)
+                f.write('cp "%s" "%s"\n' % (setup_path, current))
+                f.write('chmod +x "%s"\n' % current)
+                f.write('"%s" &\n' % current)
                 f.write('rm -f "$0"\n')
             os.chmod(script, 0o755)
             subprocess.Popen(["/bin/sh", script], start_new_session=True, close_fds=True)
@@ -401,16 +430,24 @@ class EncryptHomeUpdater:
     # Manifest abrufen + validieren
     # -------------------------
     @staticmethod
-    def _github_release_asset(data: dict) -> dict | None:
+    def _github_release_asset(data: dict, installer: bool = False) -> dict | None:
         assets = data.get("assets") or []
         system = platform.system().lower()
+
         if system == "windows":
-            preferred = [
-                asset for asset in assets
-                if "windows" in str(asset.get("name", "")).lower()
-                and "setup" not in str(asset.get("name", "")).lower()
-                and "installer" not in str(asset.get("name", "")).lower()
-            ]
+            if installer:
+                preferred = [
+                    asset for asset in assets
+                    if ("setup" in str(asset.get("name", "")).lower()
+                        or "installer" in str(asset.get("name", "")).lower())
+                ]
+            else:
+                preferred = [
+                    asset for asset in assets
+                    if "windows" in str(asset.get("name", "")).lower()
+                    and "setup" not in str(asset.get("name", "")).lower()
+                    and "installer" not in str(asset.get("name", "")).lower()
+                ]
         elif system == "darwin":
             preferred = [
                 asset for asset in assets
@@ -418,24 +455,38 @@ class EncryptHomeUpdater:
                     keyword in str(asset.get("name", "")).lower()
                     for keyword in ("macos", "darwin")
                 )
+                and (
+                    not installer
+                    or "setup" in str(asset.get("name", "")).lower()
+                    or "installer" in str(asset.get("name", "")).lower()
+                )
             ]
         else:
             preferred = [
                 asset for asset in assets
                 if "linux" in str(asset.get("name", "")).lower()
+                and (
+                    not installer
+                    or "setup" in str(asset.get("name", "")).lower()
+                    or "installer" in str(asset.get("name", "")).lower()
+                )
             ]
 
         if preferred:
             return preferred[0]
+
+        if installer:
+            return None
 
         raise ValueError(
             f"GitHub-Release enthält kein passendes {system}-Programm."
         )
 
     @staticmethod
-    def _github_release_to_manifest(data: dict) -> dict:
+    def _github_release_to_manifest(data: dict, asset: dict | None = None) -> dict:
         tag = str(data.get("tag_name", "")).strip().lstrip("v")
-        asset = EncryptHomeUpdater._github_release_asset(data)
+        if asset is None:
+            asset = EncryptHomeUpdater._github_release_asset(data)
         if not asset:
             raise ValueError("GitHub-Release enthält keine passende Datei.")
         url = asset.get("browser_download_url")
@@ -468,7 +519,7 @@ class EncryptHomeUpdater:
             return url
         return url
 
-    def fetch_manifest(self, timeout: int = 8) -> dict:
+    def _fetch_release_data(self, timeout: int = 8) -> dict:
         url = self._release_list_url() if self.channel == "beta" else self.update_json_url
         try:
             response = requests.get(url, timeout=timeout)
@@ -500,9 +551,14 @@ class EncryptHomeUpdater:
             )
             data = releases[0]
 
-        if isinstance(data, dict) and "tag_name" in data and "assets" in data:
-            data = self._github_release_to_manifest(data)
+        if not (isinstance(data, dict) and "tag_name" in data and "assets" in data):
+            raise ValueError("GitHub-Release enthält keine verwertbaren Daten.")
 
+        return data
+
+    def fetch_manifest(self, timeout: int = 8) -> dict:
+        data = self._fetch_release_data(timeout=timeout)
+        data = self._github_release_to_manifest(data)
         return validate_latest_json(data)
 
     # -------------------------

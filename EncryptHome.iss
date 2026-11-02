@@ -42,8 +42,9 @@ DisableProgramGroupPage=yes
 ; jedem Build geleert und ist nicht versioniert.
 InfoBeforeFile=Willkommen bei ANCORATE.txt
 InfoAfterFile=Installation erfolgreich abgeschlos.txt
-; Uncomment the following line to run in non administrative install mode (install for current user only).
-;PrivilegesRequired=lowest
+; Per-user installation keeps the application directory writable, so the
+; in-app self-updater can replace the executable without elevation.
+PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=dist\setup_output
 OutputBaseFilename=EncryptHome-Setup

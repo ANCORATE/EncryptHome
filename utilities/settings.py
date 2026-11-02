@@ -1256,12 +1256,6 @@ class SettingsDialog(QDialog):
             )
             return
 
-        updater = EncryptHomeUpdater(
-            current_version=VERSION_FULL,
-            update_json_url=self.data.get("update_url", UPDATE_URL),
-            channel=self.data.get("update_channel", "stable"),
-        )
-
         reply = QMessageBox.question(
             self,
             "Update installieren",
@@ -1281,15 +1275,10 @@ class SettingsDialog(QDialog):
                 update_json_url=self.data.get("update_url", UPDATE_URL),
                 channel=self.data.get("update_channel", "stable"),
             )
-            try:
-                manifest = updater.fetch_manifest()
-            except Exception as e:
-                raise ValueError(f"Update-Manifest konnte nicht geladen werden:\n{e}")
-
-            # Integritätsangabe aus dem validierten Manifest übernehmen
-            expected = manifest.get("sha256") or ""
-
-            updater.start_update(expected_sha256=expected)
+            # Der Updater wählt passend zum Installationsort (beschreibbar vs.
+            # schreibgeschützt) das portable Binary bzw. den Installer aus und
+            # prüft dessen Integrität selbst.
+            updater.start_update()
         except Exception as e:
             QMessageBox.critical(
                 self, "Update-Fehler", f"Update konnte nicht gestartet werden:\n{e}"
