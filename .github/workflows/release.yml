@@ -132,10 +132,10 @@ jobs:
             Release ${{ github.ref_name }} of EncryptHome.
 
             Changes:
-            - Centralized version management
-            - GitHub Releases-based updates (stable/beta channels)
-            - Standalone executable self-update
-            - SOS scanner without hard psutil dependency
-            - CI and packaging improvements
+            - Beta release for the 27.1 stability and UX cycle
+            - In-app updater now uses the installer for protected install directories
+            - Per-user installer defaults for writable self-updates
+            - Clearer update status and install flow in settings
+            - Update integrity checks remain enforced before installation
 
             Includes Windows, macOS, and Linux binaries.
