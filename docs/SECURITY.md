@@ -175,7 +175,7 @@ def generate_device_key() -> bytes:
 ```python
 FLAG_DEVICE = 0x01    # Container requires device binding
 FLAG_KEYFILE = 0x02   # Container uses keyfile authentication
-FLAG_PRO_VAULT = 0x04 # Container created with EncryptPro
+FLAG_RESERVED_0x04 = 0x04 # Reserved flag (unused)
 ```
 
 ## Container Security
@@ -449,7 +449,7 @@ Secure deletion overwrites the target data in-place before it is removed. Each p
 
 #### 2. Advanced Attackers
 - **Risk**: State-sponsored actors
-- **Mitigation**: Use EncryptPro with enhanced security
+- **Mitigation**: Use strong, unique passwords and keep the application updated
 - **Impact**: Hardware fingerprint spoofing possible
 
 #### 3. User Error

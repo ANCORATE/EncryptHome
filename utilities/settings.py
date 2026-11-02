@@ -1027,9 +1027,6 @@ class SettingsDialog(QDialog):
         self.install_update_btn.clicked.connect(self.install_update)
         btn_row.addWidget(self.install_update_btn)
 
-        upgrade_btn = QPushButton("Upgrade auf EncryptPro (coming soon)")
-        btn_row.addWidget(upgrade_btn)
-
         layout.addLayout(btn_row)
 
         widget.setLayout(layout)

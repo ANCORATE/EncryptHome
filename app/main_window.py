@@ -93,7 +93,6 @@ def _item_name(name: str) -> str:
 # ============================================================
 
 class App(QMainWindow):
-    LAN_DISC_PORT = 48291  # UDP-Port für LAN-Discovery
     LAN_TCP_PORT = 48292  # TCP-Port für LAN-Verbindungen
     LAN_MAGIC = b"ANCORATE_DISCOVER_V1"
     LAN_CHUNK = 64 * 1024  # 64 KiBp
@@ -1281,14 +1280,14 @@ class App(QMainWindow):
                 if salt is None:
                     raise ValueError("Salt konnte nicht gelesen werden.")
 
-                if flags & FLAG_PRO_VAULT:
+                if flags & FLAG_RESERVED_0x04:
                     self.append_log(
                         "Open blocked: Pro vault detected in Home (flag 0x04)."
                     )
                     QMessageBox.critical(
                         self,
                         "Nicht unterstützter Tresor",
-                        "Dieser Tresor wurde mit ANCORATE EncryptPro erstellt und kann in EncryptHome nicht geöffnet werden.\n\nBitte verwende ANCORATE EncryptPro.\nWeitere Informationen unter ancorate.com",
+                        "Dieser Tresor verwendet ein nicht unterstütztes Format und kann in dieser Version von EncryptHome nicht geöffnet werden.",
                     )
                     self.update_container_path()
                     return
@@ -1437,14 +1436,14 @@ Mögliche Ursache
                 if salt is None:
                     raise ValueError("Salt konnte nicht gelesen werden.")
 
-                if flags & FLAG_PRO_VAULT:
+                if flags & FLAG_RESERVED_0x04:
                     self.append_log(
                         "Open blocked: Pro vault detected in Home (flag 0x04)."
                     )
                     QMessageBox.critical(
                         self,
                         "Nicht unterstützter Tresor",
-                        "Dieser Tresor wurde mit ANCORATE EncryptPro erstellt und kann in EncryptHome nicht geöffnet werden.\n\nBitte verwende ANCORATE EncryptPro.\nWeitere Informationen unter ancorate.com",
+                        "Dieser Tresor verwendet ein nicht unterstütztes Format und kann in dieser Version von EncryptHome nicht geöffnet werden.",
                     )
                     self.update_container_path()
                     return
