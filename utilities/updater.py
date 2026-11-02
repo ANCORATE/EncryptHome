@@ -165,9 +165,10 @@ _CHUNK = 64 * 1024
 
 
 class EncryptHomeUpdater:
-    def __init__(self, current_version: str, update_json_url: str):
+    def __init__(self, current_version: str, update_json_url: str, channel: str = "stable"):
         self.current_version = current_version
         self.update_json_url = update_json_url
+        self.channel = (channel or "stable").lower()
 
         self.base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
         self.update_dir = os.path.join(self.base_dir, "update_temp")
@@ -188,6 +189,24 @@ class EncryptHomeUpdater:
         """
         data = self.fetch_manifest()
         latest_version = normalize_version_label(data["version"])
+
+        # Allow switching from a pre-release (beta) to a stable release
+        # of the same or a newer core version, even if the version number
+        # itself is not strictly greater.
+        current_is_prerelease = "-" in str(self.current_version)
+        latest_is_stable = "-" not in str(latest_version)
+        if (
+            self.channel == "stable"
+            and current_is_prerelease
+            and latest_is_stable
+        ):
+            try:
+                cur_core = tuple(int(p) for p in str(self.current_version).split("-")[0].split(".")[:3])
+                lat_core = tuple(int(p) for p in str(latest_version).split("-")[0].split(".")[:3])
+                if lat_core >= cur_core:
+                    return {"status": "UPDATE_AVAILABLE", "data": data}
+            except Exception:
+                pass
 
         if not is_newer_version(latest_version, self.current_version):
             return {"status": "NO_UPDATE", "data": data}
@@ -361,9 +380,21 @@ class EncryptHomeUpdater:
             "changelog": data.get("body") or data.get("name") or "",
         }
 
+    def _release_list_url(self) -> str:
+        url = self.update_json_url
+        if self.channel == "beta":
+            # /releases/latest -> /releases (includes prereleases)
+            if url.endswith("/releases/latest"):
+                return url[: -len("/latest")]
+            if url.endswith("/releases"):
+                return url
+            return url
+        return url
+
     def fetch_manifest(self, timeout: int = 8) -> dict:
+        url = self._release_list_url() if self.channel == "beta" else self.update_json_url
         try:
-            response = requests.get(self.update_json_url, timeout=timeout)
+            response = requests.get(url, timeout=timeout)
         except requests.RequestException as e:
             raise ConnectionError(f"Keine Antwort vom Update-Server: {e}") from e
         if response.status_code != 200:
@@ -374,6 +405,12 @@ class EncryptHomeUpdater:
             data = response.json()
         except Exception as e:
             raise ValueError(f"Update-Manifest ist kein gültiges JSON: {e}") from e
+
+        # Beta channel: /releases returns a list; take the first (newest)
+        if isinstance(data, list):
+            if not data:
+                raise ValueError("Keine Releases gefunden.")
+            data = data[0]
 
         if isinstance(data, dict) and "tag_name" in data and "assets" in data:
             data = self._github_release_to_manifest(data)
