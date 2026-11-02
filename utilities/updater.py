@@ -10,6 +10,8 @@ import socket
 import subprocess
 import sys
 import time
+import tempfile
+import shutil
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -171,8 +173,32 @@ class EncryptHomeUpdater:
         self.channel = (channel or "stable").lower()
 
         self.base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-        self.update_dir = os.path.join(self.base_dir, "update_temp")
+        self.update_dir = self._user_update_dir()
         os.makedirs(self.update_dir, exist_ok=True)
+
+    @staticmethod
+    def _user_update_dir() -> str:
+        """Return a writable per-user directory for downloads and cache data."""
+        if platform.system() == "Windows":
+            root = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+            path = os.path.join(root, "ANCORATE", "EncryptHome", "update_temp")
+        elif platform.system() == "Darwin":
+            path = os.path.expanduser(
+                "~/Library/Application Support/ANCORATE/EncryptHome/update_temp"
+            )
+        else:
+            root = os.environ.get(
+                "XDG_DATA_HOME", os.path.expanduser("~/.local/share")
+            )
+            path = os.path.join(root, "ANCORATE", "EncryptHome", "update_temp")
+
+        try:
+            os.makedirs(path, exist_ok=True)
+            return path
+        except OSError:
+            fallback = os.path.join(tempfile.gettempdir(), "ANCORATE", "EncryptHome")
+            os.makedirs(fallback, exist_ok=True)
+            return fallback
 
     # -------------------------
     # Prüfen ob Update verfügbar + Infos zurückgeben
@@ -241,8 +267,18 @@ class EncryptHomeUpdater:
         if not os.path.getsize(setup_path) > 0:
             raise RuntimeError("Der heruntergeladene Update ist leer.")
 
-        current = sys.executable
+        current = os.path.abspath(sys.executable)
         pid = os.getpid()
+
+        if self._path_is_writable(current):
+            target = current
+        else:
+            target = self._user_install_path(setup_path)
+
+        if target != current:
+            self._install_user_binary(setup_path, target)
+            self._launch_binary(target)
+            sys.exit(0)
 
         if platform.system() == "Windows":
             script = os.path.join(self.update_dir, "update_replace.bat")
@@ -277,6 +313,41 @@ class EncryptHomeUpdater:
             subprocess.Popen(["/bin/sh", script], start_new_session=True, close_fds=True)
 
         sys.exit(0)
+
+    @staticmethod
+    def _path_is_writable(path: str) -> bool:
+        """Check directory write access without requiring administrator rights."""
+        directory = os.path.dirname(path) or os.curdir
+        try:
+            os.makedirs(directory, exist_ok=True)
+            fd, probe = tempfile.mkstemp(prefix=".update-write-", dir=directory)
+            os.close(fd)
+            os.remove(probe)
+            return True
+        except OSError:
+            return False
+
+    def _user_install_path(self, downloaded_path: str) -> str:
+        name = "EncryptHome.exe" if platform.system() == "Windows" else "EncryptHome"
+        install_dir = os.path.join(os.path.dirname(self.update_dir), "app")
+        os.makedirs(install_dir, exist_ok=True)
+        return os.path.join(install_dir, name)
+
+    @staticmethod
+    def _install_user_binary(source: str, target: str) -> None:
+        target_dir = os.path.dirname(target)
+        os.makedirs(target_dir, exist_ok=True)
+        temporary = target + ".new"
+        shutil.copy2(source, temporary)
+        if platform.system() != "Windows":
+            os.chmod(temporary, os.stat(temporary).st_mode | 0o111)
+        os.replace(temporary, target)
+
+    @staticmethod
+    def _launch_binary(path: str) -> None:
+        if platform.system() != "Windows":
+            os.chmod(path, os.stat(path).st_mode | 0o111)
+        subprocess.Popen([path], close_fds=True, start_new_session=True)
 
     # -------------------------
     # Installer starten
@@ -319,26 +390,11 @@ class EncryptHomeUpdater:
         if not os.path.getsize(setup_path) > 0:
             raise RuntimeError("Der heruntergeladene Installer ist leer.")
 
-        if platform.system() == "Windows":
-            try:
-                import ctypes
-
-                ctypes.windll.shell32.ShellExecuteW(
-                    None, "runas", setup_path, None, None, 1
-                )
-            except Exception:
-                subprocess.Popen([setup_path], shell=False)
-        elif platform.system() == "Darwin":
-            # macOS: ausführbar machen; je nach Format korrekt öffnen/installieren
-            os.chmod(setup_path, os.stat(setup_path).st_mode | 0o111)
-            if url_name.lower().endswith((".dmg", ".pkg")):
-                subprocess.Popen(["open", setup_path])
-            else:
-                subprocess.Popen([setup_path])
-        else:
-            # Linux: ausführbar machen (AppImage/Deb-Skripte) und starten
-            os.chmod(setup_path, os.stat(setup_path).st_mode | 0o111)
-            subprocess.Popen([setup_path])
+        # Release assets are portable executables. Launch them directly instead
+        # of invoking an elevated installer, so updates work for normal users.
+        target = self._user_install_path(setup_path)
+        self._install_user_binary(setup_path, target)
+        self._launch_binary(target)
         sys.exit(0)
 
     # -------------------------
@@ -348,19 +404,33 @@ class EncryptHomeUpdater:
     def _github_release_asset(data: dict) -> dict | None:
         assets = data.get("assets") or []
         system = platform.system().lower()
-        keywords = []
         if system == "windows":
-            keywords = ["windows", ".exe"]
+            preferred = [
+                asset for asset in assets
+                if "windows" in str(asset.get("name", "")).lower()
+                and "setup" not in str(asset.get("name", "")).lower()
+                and "installer" not in str(asset.get("name", "")).lower()
+            ]
         elif system == "darwin":
-            keywords = ["macos", "mac", "darwin"]
+            preferred = [
+                asset for asset in assets
+                if any(
+                    keyword in str(asset.get("name", "")).lower()
+                    for keyword in ("macos", "darwin")
+                )
+            ]
         else:
-            keywords = ["linux"]
+            preferred = [
+                asset for asset in assets
+                if "linux" in str(asset.get("name", "")).lower()
+            ]
 
-        for asset in assets:
-            name = str(asset.get("name", "")).lower()
-            if any(keyword in name for keyword in keywords):
-                return asset
-        return assets[0] if assets else None
+        if preferred:
+            return preferred[0]
+
+        raise ValueError(
+            f"GitHub-Release enthält kein passendes {system}-Programm."
+        )
 
     @staticmethod
     def _github_release_to_manifest(data: dict) -> dict:
@@ -371,11 +441,18 @@ class EncryptHomeUpdater:
         url = asset.get("browser_download_url")
         if not url:
             raise ValueError("GitHub-Release-Asset hat keine Download-URL.")
+        digest = str(asset.get("digest") or "").strip()
+        if digest.lower().startswith("sha256:"):
+            digest = digest.split(":", 1)[1]
         return {
             "version": tag,
             "url": url,
-            "sha256": None,
-            "size_mb": None,
+            "sha256": digest or None,
+            "size_mb": (
+                round(int(asset["size"]) / (1024 * 1024), 2)
+                if asset.get("size")
+                else None
+            ),
             "published_at": data.get("published_at"),
             "changelog": data.get("body") or data.get("name") or "",
         }
@@ -406,11 +483,22 @@ class EncryptHomeUpdater:
         except Exception as e:
             raise ValueError(f"Update-Manifest ist kein gültiges JSON: {e}") from e
 
-        # Beta channel: /releases returns a list; take the first (newest)
+        # Beta/custom channel endpoints return a release list.
         if isinstance(data, list):
             if not data:
                 raise ValueError("Keine Releases gefunden.")
-            data = data[0]
+            releases = [
+                item for item in data
+                if isinstance(item, dict)
+                and bool(item.get("prerelease")) == (self.channel == "beta")
+            ]
+            if not releases:
+                raise ValueError("Kein passendes Release für den Update-Kanal gefunden.")
+            releases.sort(
+                key=lambda item: parse_version(item.get("tag_name", "")),
+                reverse=True,
+            )
+            data = releases[0]
 
         if isinstance(data, dict) and "tag_name" in data and "assets" in data:
             data = self._github_release_to_manifest(data)

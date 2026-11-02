@@ -10,6 +10,7 @@ import os
 import struct
 import time
 import secrets
+from pathlib import PurePosixPath
 import tempfile
 import threading
 from typing import Optional
@@ -83,6 +84,36 @@ def _secure_delete_plaintext(path: str, method: str):
         os.remove(path)
     except Exception:
         pass
+
+
+def _safe_export_path(target_dir: str, entry_name: str) -> str:
+    """Resolve a logical vault name below target_dir without path traversal."""
+    raw_name = str(entry_name or "").replace("\\", "/")
+    if not raw_name or raw_name.startswith("/") or ":" in raw_name:
+        raise ValueError("Ungültiger Dateiname im Tresor.")
+
+    parts = PurePosixPath(raw_name).parts
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise ValueError("Ungültiger Dateipfad im Tresor.")
+
+    root = os.path.realpath(os.path.abspath(target_dir))
+    candidate = os.path.realpath(os.path.abspath(os.path.join(root, *parts)))
+    if os.path.commonpath((root, candidate)) != root:
+        raise ValueError("Exportpfad liegt außerhalb des Zielordners.")
+    return candidate
+
+
+def _safe_logical_folder(folder: str) -> str:
+    raw = str(folder or "").replace("\\", "/").strip()
+    if not raw:
+        return ""
+    if raw.startswith("/"):
+        raise ValueError("Absolute Ordnerpfade sind nicht erlaubt.")
+    raw = raw.strip("/")
+    parts = raw.split("/")
+    if any(not part or part in (".", "..") or ":" in part for part in parts):
+        raise ValueError("Ungültiger Zielordner.")
+    return "/".join(part.strip() for part in parts)
 
 
 class DeleteWorker(QObject):
@@ -340,15 +371,14 @@ class AddWorker(QObject):
             if len(self.master_key) != 32:
                 raise ValueError("Ungültige Master-Key-Länge")
             
-            print(f"[DEBUG] Starting to add {len(self.files)} files to container")
-
-            # Debug: Key prüfen
             v2 = self.master_key
-            if len(v2) not in (16, 24, 32):
-                v2 = (v2 + b"\x00" * 32)[:32]
+            folder = _safe_logical_folder(self.folder)
 
             added = []
             added_paths = []
+            valid_files = [path for path in self.files if os.path.isfile(path)]
+            if not valid_files:
+                raise FileNotFoundError("Keine gültigen Quelldateien gefunden.")
 
             self.stage.emit("Kopiere vorhandene Tresordaten sicher...")
 
@@ -367,25 +397,27 @@ class AddWorker(QObject):
                 )
 
                 # Zielordner (inkl. Elternpfade) in der Meta festhalten
-                if self.folder:
+                if folder:
                     folders = set(meta.get("folders") or [])
-                    parts = self.folder.split("/")
+                    parts = folder.split("/")
                     p = ""
                     for part in parts:
                         p = f"{p}/{part}" if p else part
                         folders.add(p)
-                total = len(self.files)
-                for idx, filepath in enumerate(self.files, start=1):
+                total = len(valid_files)
+                for idx, filepath in enumerate(valid_files, start=1):
                     if self.stop_event and self.stop_event.is_set():
                         raise RuntimeError("Vorgang abgebrochen")
 
                     if not os.path.isfile(filepath):
-                        continue
+                        raise FileNotFoundError(
+                            f"Quelldatei ist nicht mehr verfügbar: {filepath}"
+                        )
 
                     offset = f.tell()
                     name = os.path.basename(filepath)
-                    if self.folder:
-                        name = f"{self.folder}/{name}"
+                    if folder:
+                        name = f"{folder}/{name}"
                     size = os.path.getsize(filepath)
 
                     def cb(progress_value):
@@ -552,7 +584,7 @@ class ExportBatchWorker(QObject):
             for index, entry in enumerate(self.entries, start=1):
                 if self.stop_event.is_set():
                     raise RuntimeError("Cancelled")
-                save_to = os.path.join(self.target_dir, entry["name"])
+                save_to = _safe_export_path(self.target_dir, entry["name"])
                 export_entry_to_path(
                     self.container_path,
                     {**entry, "__save_to": save_to},
@@ -637,7 +669,7 @@ def export_entry_to_path(
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
 
-    with open(container_file, "r+b") as f:
+    with open(container_file, "rb") as f:
         read_header(f)
         f.seek(meta_entry["offset"])
         blob_len = meta_entry["length"]
@@ -660,14 +692,14 @@ class StartupUpdateWorker(QThread):
 
     def run(self):
         try:
-            from utilities.updater import validate_latest_json
-
             settings = load_settings()
             update_url = settings.get("update_url", UPDATE_URL)
-            response = requests.get(update_url, timeout=5)
-            if response.status_code != 200:
-                raise ConnectionError(f"HTTP {response.status_code}")
-            data = validate_latest_json(response.json())
+            updater = EncryptHomeUpdater(
+                current_version=VERSION_FULL,
+                update_json_url=update_url,
+                channel=settings.get("update_channel", "stable"),
+            )
+            data = updater.fetch_manifest(timeout=5)
             data["update_url"] = update_url
             self.finished.emit(data)
         except Exception as e:
