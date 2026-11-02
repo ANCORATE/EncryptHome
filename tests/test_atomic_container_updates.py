@@ -50,7 +50,7 @@ class AtomicContainerUpdateTests(unittest.TestCase):
         target = os.path.join(self.temp_dir.name, "export")
         self.assertEqual(
             _safe_export_path(target, "folder/file.txt"),
-            os.path.abspath(os.path.join(target, "folder", "file.txt")),
+            os.path.realpath(os.path.join(target, "folder", "file.txt")),
         )
         with self.assertRaises(ValueError):
             _safe_export_path(target, "../outside.txt")
