@@ -534,23 +534,14 @@ class ChangelogWorker(QThread):
 
     def run(self):
         try:
-            from .updater import validate_latest_json, EncryptHomeUpdater
+            from .updater import EncryptHomeUpdater
 
-            url = UPDATE_URL
-            if self.channel == "beta" and url.endswith("/releases/latest"):
-                url = url[: -len("/latest")]
-
-            response = requests.get(url, timeout=5)
-            if response.status_code != 200:
-                raise ConnectionError(f"HTTP {response.status_code}")
-            data = response.json()
-            if isinstance(data, list):
-                if not data:
-                    raise ValueError("Keine Releases gefunden.")
-                data = data[0]
-            if isinstance(data, dict) and "tag_name" in data and "assets" in data:
-                data = EncryptHomeUpdater._github_release_to_manifest(data)
-            data = validate_latest_json(data)
+            updater = EncryptHomeUpdater(
+                current_version=VERSION_FULL,
+                update_json_url=UPDATE_URL,
+                channel=self.channel,
+            )
+            data = updater.fetch_manifest(timeout=5)
             self.finished.emit(data)
         except Exception as e:
             self.error.emit(str(e))
@@ -1057,6 +1048,8 @@ class SettingsDialog(QDialog):
                 os.path.join(BASE_DIR, "update_temp"),  # Legacy-Ort
                 os.path.join(os.getcwd(), "cache"),  # App-Cache (falls vorhanden)
             ]
+            if EncryptHomeUpdater is not None:
+                temp_dirs.insert(0, EncryptHomeUpdater._user_update_dir())
 
             cleared = False
 
@@ -1120,54 +1113,6 @@ class SettingsDialog(QDialog):
             self.changelog_text.setText(
                 f"Fehler beim Laden:\n{error_msg}\n\nBitte prüfen Sie Ihre Internetverbindung."
             )
-
-    def ensure_admin(self) -> bool:
-        """
-        Prüft Admin-/Root-Rechte.
-        Falls nicht vorhanden, wird eine Rechteanfrage ausgelöst.
-        Gibt True zurück, wenn danach Adminrechte vorliegen.
-        """
-        try:
-            if sys.platform == "win32":
-                import ctypes
-
-                if ctypes.windll.shell32.IsUserAnAdmin():
-                    return True
-
-                # --- Windows: UAC Prompt ---
-                params = " ".join(f'"{arg}"' for arg in sys.argv)
-                ctypes.windll.shell32.ShellExecuteW(
-                    None,
-                    "runas",  # erzwingt UAC
-                    sys.executable,
-                    params,
-                    None,
-                    1,
-                )
-                sys.exit(0)
-
-            else:
-                # --- Unix / Linux / macOS ---
-                if os.geteuid() == 0:
-                    return True
-
-                # Neustart mit sudo
-                QMessageBox.information(
-                    self,
-                    "Administrator-Rechte erforderlich",
-                    "Für Updates wird Root-Zugriff benötigt.\n"
-                    "Die Anwendung wird nun mit sudo neu gestartet.",
-                )
-
-                os.execvp("sudo", ["sudo", sys.executable] + sys.argv)
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Rechtefehler",
-                f"Administratorrechte konnten nicht angefordert werden:\n{e}",
-            )
-            return False
 
     def check_updates_manual(self):
         if EncryptHomeUpdater is None:

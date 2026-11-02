@@ -64,6 +64,22 @@ from app.power_lock import PowerLockMonitor
 FOLDER_SEP = "/"
 
 
+def _normalize_logical_path(value: str, *, allow_empty: bool = False) -> str:
+    """Normalize a user-controlled logical folder path."""
+    raw = str(value or "").replace("\\", FOLDER_SEP).strip()
+    if not raw:
+        if allow_empty:
+            return ""
+        raise ValueError("Ordnername darf nicht leer sein.")
+    if raw.startswith(FOLDER_SEP) or ":" in raw:
+        raise ValueError("Absolute Ordnerpfade sind nicht erlaubt.")
+
+    parts = [part.strip() for part in raw.strip(FOLDER_SEP).split(FOLDER_SEP)]
+    if not parts or any(not part or part in (".", "..") for part in parts):
+        raise ValueError("Ungültiger Ordnerpfad.")
+    return FOLDER_SEP.join(parts)
+
+
 def _folder_of(name: str) -> str:
     idx = name.rfind(FOLDER_SEP)
     return name[:idx] if idx >= 0 else ""
@@ -1245,7 +1261,7 @@ class App(QMainWindow):
             # ------------------------------------------------------------------
             # 4. Datei öffnen
             # ------------------------------------------------------------------
-            with open(self.container_path, "r+b") as fh:
+            with open(self.container_path, "rb") as fh:
                 # 4a. Header lesen: Flags + Salt
                 flags, salt = read_header(fh)
                 if salt is None:
@@ -1401,7 +1417,7 @@ Mögliche Ursache
             # ------------------------------------------------------------------
             # 4. Datei öffnen
             # ------------------------------------------------------------------
-            with open(self.container_path, "r+b") as fh:
+            with open(self.container_path, "rb") as fh:
                 # 4a. Header lesen: Flags + Salt
                 flags, salt = read_header(fh)
                 if salt is None:
@@ -3406,7 +3422,14 @@ Mögliche Ursache
         if not ok or not name.strip():
             return
         previous_meta = copy.deepcopy(self.meta)
-        path = f"{base}{name.strip().strip(FOLDER_SEP)}"
+        try:
+            clean_name = _normalize_logical_path(name)
+            target = _normalize_logical_path(target, allow_empty=True)
+        except ValueError as error:
+            QMessageBox.warning(self, "Ungültiger Ordnername", str(error))
+            return
+        base = f"{target}{FOLDER_SEP}" if target else ""
+        path = f"{base}{clean_name}"
         folders = set(self.meta.get("folders") or [])
         folders.add(path)
         self.meta["folders"] = sorted(folders, key=str.lower)
@@ -3437,7 +3460,15 @@ Mögliche Ursache
             )
             if not ok or not current:
                 return
-            target = "" if current == "(Root)" else current.strip().strip(FOLDER_SEP)
+            try:
+                target = (
+                    ""
+                    if current == "(Root)"
+                    else _normalize_logical_path(current)
+                )
+            except ValueError as error:
+                QMessageBox.warning(self, "Ungültiger Zielordner", str(error))
+                return
         self._apply_move(idxs, target)
 
     # ------------------ Drag&Drop: Dateien im Tresor verschieben ------------------
@@ -3461,7 +3492,11 @@ Mögliche Ursache
         """Verschiebt Datei-Einträge in den Zielordner (nur Pfad/Name, keine
         Neuverschlüsselung) und hält Namen eindeutig."""
         previous_meta = copy.deepcopy(self.meta)
-        target = target or ""
+        try:
+            target = _normalize_logical_path(target, allow_empty=True)
+        except ValueError as error:
+            QMessageBox.warning(self, "Ungültiger Zielordner", str(error))
+            return
         folders = set(self.meta.get("folders") or [])
         prefix = target + FOLDER_SEP if target else ""
         changed = []
@@ -3522,8 +3557,10 @@ Mögliche Ursache
         )
         if not ok or not name.strip():
             return
-        new_name = name.strip().strip(FOLDER_SEP)
-        if not new_name:
+        try:
+            new_name = _normalize_logical_path(name)
+        except ValueError as error:
+            QMessageBox.warning(self, "Ungültiger Ordnername", str(error))
             return
         parent = _folder_of(folder)
         new_folder = f"{parent}{FOLDER_SEP}{new_name}" if parent else new_name
