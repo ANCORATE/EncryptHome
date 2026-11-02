@@ -133,6 +133,7 @@ jobs:
 
             Changes:
             - Beta release for the 27.1 stability and UX cycle
+            - Fixed crash on exit caused by late update-check signals
             - In-app updater now uses the installer for protected install directories
             - Per-user installer defaults for writable self-updates
             - Clearer update status and install flow in settings
