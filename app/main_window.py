@@ -125,6 +125,7 @@ class App(QMainWindow):
         self._delete_committing = False
         self._worker_threads = {}
         self._close_after_workers = False
+        self._closing = False
         self._lan_sharing = False
         self._lan_threads = []
         self._lan_tcp_sock = None
@@ -348,9 +349,14 @@ class App(QMainWindow):
             return False
 
     def on_update_check_finished(self, data: dict):
+        if getattr(self, "_closing", False):
+            return
         worker = self.update_worker
         if worker is not None:
-            worker.wait()
+            try:
+                worker.wait(1000)
+            except Exception:
+                pass
             worker.deleteLater()
             self._release_worker_thread(worker)
         if self._close_after_workers:
@@ -365,9 +371,14 @@ class App(QMainWindow):
         self.show_update_news(data)
 
     def on_update_check_error(self, error_msg: str):
+        if getattr(self, "_closing", False):
+            return
         worker = self.update_worker
         if worker is not None:
-            worker.wait()
+            try:
+                worker.wait(1000)
+            except Exception:
+                pass
             worker.deleteLater()
             self._release_worker_thread(worker)
         print(f"[UPDATE] Updatecheck fehlgeschlagen: {error_msg}")
@@ -394,7 +405,10 @@ class App(QMainWindow):
     def _release_worker_thread(self, thread):
         self._worker_threads.pop(thread, None)
         if self._close_after_workers and not self._worker_threads:
-            QTimer.singleShot(0, self.close)
+            if getattr(self, "_closing", False):
+                self.close()
+            else:
+                QTimer.singleShot(0, self.close)
 
     def show_update_news(self, data: dict):
         if self.update_news_shown:
@@ -2762,6 +2776,25 @@ Mögliche Ursache
         self.status.setText(txt)
 
     def closeEvent(self, event):
+        self._closing = True
+
+        worker = getattr(self, "update_worker", None)
+        if worker is not None:
+            try:
+                worker.finished.disconnect()
+            except Exception:
+                pass
+            try:
+                worker.error.disconnect()
+            except Exception:
+                pass
+            try:
+                if worker.isRunning():
+                    worker.wait(2000)
+            except Exception:
+                pass
+            self.update_worker = None
+
         if self._delete_in_progress:
             if self._delete_committing:
                 self._delete_close_after = True
