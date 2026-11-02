@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/ANCORATE/EncryptHome/actions/workflows/ci.yml/badge.svg)](https://github.com/ANCORATE/EncryptHome/actions/workflows/ci.yml)
 
-**EncryptHome 27.0.3 — Capsule**
+**EncryptHome 27.1-beta — Capsule**
 A local desktop app for encrypted `.salt` vaults: file management, device binding, preview, secure deletion, and integrity checks.
 
 ## Quick start

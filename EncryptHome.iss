@@ -12,7 +12,7 @@
 ;   3. Inno Setup auf diese Datei ausfuehren -> dist\setup_output\*.exe
 
 #define MyAppName "ANCORATE EncryptHome"
-#define MyAppVersion "27.0.3"
+#define MyAppVersion "27.1-beta"
 #define MyAppPublisher "ANCORATE"
 #define MyAppExeName "EncryptHome.exe"
 #define MyAppAssocName "ANCORATE Secure Authentication Layer Technology File"
