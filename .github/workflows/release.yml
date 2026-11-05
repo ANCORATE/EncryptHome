@@ -132,7 +132,7 @@ jobs:
             Release ${{ github.ref_name }} of EncryptHome.
 
             Changes:
-            - Beta release for the 27.1 stability and UX cycle
+            - Stable release for the 27.1 stability and UX cycle
             - Removed obsolete EncryptPro/Discovery references
             - Fixed crash on exit caused by late update-check signals
             - In-app updater now uses the installer for protected install directories
